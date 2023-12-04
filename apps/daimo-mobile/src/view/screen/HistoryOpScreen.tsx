@@ -23,7 +23,7 @@ import { ButtonBig } from "../shared/Button";
 import { ScreenHeader, useExitBack } from "../shared/ScreenHeader";
 import Spacer from "../shared/Spacer";
 import { AddrText } from "../shared/addr";
-import { ParamListHome, useDisableTabSwipe, useNav } from "../shared/nav";
+import { ParamListTab, useDisableTabSwipe, useNav } from "../shared/nav";
 import { OpStatusIndicator, OpStatusName } from "../shared/opStatus";
 import { ss } from "../shared/style";
 import {
@@ -35,7 +35,7 @@ import {
 } from "../shared/text";
 import { useWithAccount } from "../shared/withAccount";
 
-type Props = NativeStackScreenProps<ParamListHome, "HistoryOp">;
+type Props = NativeStackScreenProps<ParamListTab, "BottomSheetHistoryOp">;
 
 export function HistoryOpScreen(props: Props) {
   const Inner = useWithAccount(HistoryOpScreenInner);
@@ -53,7 +53,7 @@ function HistoryOpScreenInner({
   // while the op is pending, and it confirms, the screen should update.
   // A pending op always has an opHash (since its initiated by the user's
   // account).
-  let { op } = route.params;
+  let { op, shouldAddInset } = route.params;
   op = syncFindSameOp(op.opHash, account.recentTransfers) || op;
 
   // If we sent a note, show the note screen.
@@ -70,7 +70,11 @@ function HistoryOpScreenInner({
 
   return (
     <View style={ss.container.screen}>
-      <ScreenHeader title="Transfer" onBack={useExitBack()} />
+      <ScreenHeader
+        title="Transfer"
+        onExit={useExitBack()}
+        shouldAddInset={shouldAddInset}
+      />
       <Spacer h={64} />
       <TransferBody account={account} op={op} />
       <Spacer h={64} />

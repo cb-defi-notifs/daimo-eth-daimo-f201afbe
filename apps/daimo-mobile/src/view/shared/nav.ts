@@ -57,6 +57,11 @@ export type ParamListTab = {
   HomeTab: NavigatorScreenParams<ParamListHome>;
   SendTab: NavigatorScreenParams<ParamListSend>;
   SettingsTab: { screen: keyof ParamListSettings; params?: any };
+  BottomSheetList: undefined;
+  BottomSheetHistoryOp: {
+    op: TransferOpEvent;
+    shouldAddInset: boolean;
+  };
 };
 
 export function useNav<

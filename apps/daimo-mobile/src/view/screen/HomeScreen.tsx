@@ -99,11 +99,28 @@ function HomeScreenInner({ account }: { account: Account }) {
   // Show search results when search is focused.
   const [searchPrefix, setSearchPrefix] = useState<string | undefined>();
 
+  const onOpenBottomSheet = () => {
+    if (isFocused && bottomSheetRef.current) {
+      bottomSheetRef.current.expand();
+    }
+  };
+
   // Show history
   const histListMini = (
-    <HistoryListSwipe account={account} showDate={false} maxToShow={5} />
+    <HistoryListSwipe
+      account={account}
+      showDate={false}
+      maxToShow={5}
+      onOpenBottomSheet={onOpenBottomSheet}
+    />
   );
-  const histListFull = <HistoryListSwipe account={account} showDate />;
+  const histListFull = (
+    <HistoryListSwipe
+      account={account}
+      showDate
+      onOpenBottomSheet={onOpenBottomSheet}
+    />
+  );
 
   const onScrollBeginDrag = () => {
     isScrollDragged.current = true;
@@ -180,7 +197,7 @@ function HomeScreenInner({ account }: { account: Account }) {
             {account.suggestedActions.length > 0 ? (
               <SuggestedActionBox action={account.suggestedActions[0]} />
             ) : (
-              <Spacer h={64} />
+              <Spacer h={screenDimensions.height > 680 ? 64 : 24} />
             )}
             <Spacer h={12} />
             <Animated.View layout={Layout}>

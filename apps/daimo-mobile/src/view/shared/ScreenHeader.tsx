@@ -12,17 +12,19 @@ export function ScreenHeader({
   title,
   onBack,
   onExit,
+  shouldAddInset = true,
 }: {
   title: string;
   onBack?: () => void;
   onExit?: () => void;
+  shouldAddInset: boolean;
 }) {
   const back = useCallback(onBack || (() => {}), [onBack]);
   const exit = useCallback(onExit || (() => {}), [onExit]);
 
   return (
     <>
-      <OfflineHeader />
+      <OfflineHeader shouldAddPaddingWhenOnline={shouldAddInset} />
       <View style={styles.screenHead}>
         <ScreenHeadButton icon="arrow-left" show={!!onBack} onPress={back} />
         <TextH3>{title}</TextH3>

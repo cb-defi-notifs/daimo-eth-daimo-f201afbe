@@ -1,6 +1,10 @@
 import BottomSheet, { BottomSheetBackdrop } from "@gorhom/bottom-sheet";
 import { BottomSheetDefaultBackdropProps } from "@gorhom/bottom-sheet/lib/typescript/components/bottomSheetBackdrop/types";
 import {
+  NativeStackNavigationOptions,
+  createNativeStackNavigator,
+} from "@react-navigation/native-stack";
+import {
   ReactNode,
   forwardRef,
   useCallback,
@@ -19,6 +23,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ScrollPellet from "./ScrollPellet";
 import { color } from "./style";
 import useTabBarHeight from "../../common/useTabBarHeight";
+import { HistoryOpScreen } from "../screen/HistoryOpScreen";
+
+const Stack = createNativeStackNavigator();
+const noHeaders: NativeStackNavigationOptions = {
+  headerShown: false,
+  animation: "fade_from_bottom",
+};
 
 interface SwipeUpDownProps {
   itemMini: ReactNode;
@@ -30,9 +41,11 @@ interface SwipeUpDownProps {
 }
 
 const screenDimensions = Dimensions.get("window");
+const SHADOW_OPACITY = 0.2;
 
 export type SwipeUpDownRef = {
   collapse: () => void;
+  expand: () => void;
 };
 
 export const SwipeUpDown = forwardRef<SwipeUpDownRef, SwipeUpDownProps>(
@@ -55,6 +68,9 @@ export const SwipeUpDown = forwardRef<SwipeUpDownRef, SwipeUpDownProps>(
     useImperativeHandle(ref, () => ({
       collapse() {
         bottomRef.current?.collapse();
+      },
+      expand() {
+        bottomRef.current?.expand();
       },
     }));
 
@@ -102,6 +118,24 @@ export const SwipeUpDown = forwardRef<SwipeUpDownRef, SwipeUpDownProps>(
       };
     });
 
+    const bottomSheetShadowStyle = useAnimatedStyle(() => {
+      return {
+        shadowOpacity: SHADOW_OPACITY - animatedIndex.value * SHADOW_OPACITY,
+      };
+    });
+
+    const TransactionList = () => (
+      <>
+        <Animated.View
+          style={[styles.itemMiniWrapper, itemMiniStyle]}
+          pointerEvents={isMini ? "auto" : "none"}
+        >
+          {itemMini}
+        </Animated.View>
+        {itemFull}
+      </>
+    );
+
     return (
       <BottomSheet
         ref={bottomRef}
@@ -115,14 +149,20 @@ export const SwipeUpDown = forwardRef<SwipeUpDownRef, SwipeUpDownProps>(
         enablePanDownToClose={false}
         enableHandlePanningGesture={!refreshing}
         enableContentPanningGesture={!refreshing}
+        style={[styles.shadowStyle, bottomSheetShadowStyle]}
       >
-        <Animated.View
-          style={[styles.itemMiniWrapper, itemMiniStyle]}
-          pointerEvents={isMini ? "auto" : "none"}
+        <Stack.Navigator
+          initialRouteName="BottomSheetList"
+          screenOptions={noHeaders}
         >
-          {itemMini}
-        </Animated.View>
-        {itemFull}
+          <Stack.Group>
+            <Stack.Screen name="BottomSheetList" component={TransactionList} />
+            <Stack.Screen
+              name="BottomSheetHistoryOp"
+              component={HistoryOpScreen}
+            />
+          </Stack.Group>
+        </Stack.Navigator>
       </BottomSheet>
     );
   }
@@ -134,5 +174,16 @@ const styles = StyleSheet.create({
     zIndex: 100,
     width: "100%",
     backgroundColor: color.white,
+  },
+  shadowStyle: {
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: SHADOW_OPACITY,
+    shadowRadius: 6.46,
+    elevation: 9,
+    borderRadius: 12,
   },
 });

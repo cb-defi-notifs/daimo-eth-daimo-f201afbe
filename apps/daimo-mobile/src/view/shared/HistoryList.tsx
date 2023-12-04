@@ -40,10 +40,12 @@ export function HistoryListSwipe({
   account,
   showDate,
   maxToShow,
+  onOpenBottomSheet,
 }: {
   account: Account;
   showDate: boolean;
   maxToShow?: number;
+  onOpenBottomSheet?(): void;
 }) {
   const ins = useSafeAreaInsets();
 
@@ -65,6 +67,7 @@ export function HistoryListSwipe({
       transfer={t}
       address={account.address}
       showDate={showDate}
+      onOpenBottomSheet={onOpenBottomSheet}
     />
   );
 
@@ -117,7 +120,12 @@ export function HistoryListSwipe({
           return <HeaderRow key={item.month} title={item.month} />;
         }
         return (
-          <TransferRow transfer={item.t} address={account.address} showDate />
+          <TransferRow
+            transfer={item.t}
+            address={account.address}
+            showDate
+            onOpenBottomSheet={onOpenBottomSheet}
+          />
         );
       }}
     />
@@ -136,10 +144,12 @@ function TransferRow({
   transfer,
   address,
   showDate,
+  onOpenBottomSheet,
 }: {
   transfer: TransferOpEvent;
   address: Address;
   showDate?: boolean;
+  onOpenBottomSheet?(): void;
 }) {
   assert(transfer.amount > 0);
   const from = getAddress(transfer.from);
@@ -151,8 +161,13 @@ function TransferRow({
   const amountDelta = from === address ? -transfer.amount : transfer.amount;
 
   const nav = useNav();
-  const viewOp = () =>
-    nav.navigate("HomeTab", { screen: "HistoryOp", params: { op: transfer } });
+  const viewOp = () => {
+    onOpenBottomSheet?.();
+    nav.navigate("BottomSheetHistoryOp", {
+      op: transfer,
+      shouldAddInset: false,
+    });
+  };
 
   const isPending = transfer.status === "pending";
   const textCol = isPending ? color.gray3 : color.midnight;
@@ -242,6 +257,7 @@ const styles = StyleSheet.create({
   transferBorder: {
     borderTopWidth: 1,
     borderColor: color.grayLight,
+    backgroundColor: "white",
   },
   transferRowWrap: {
     marginHorizontal: -24,
