@@ -5,15 +5,24 @@ import {
   getEAccountStr,
 } from "@daimo/common";
 import { Pool } from "pg";
-import { Address, bytesToHex, getAddress } from "viem";
+import { Address, Hex, bytesToHex, getAddress } from "viem";
 
 import { NameRegistry } from "./nameRegistry";
 import { chainConfig } from "../env";
+
+type LogCoordinate = {
+  logIndex: number;
+  transactionHash: Hex;
+};
 
 /* Ephemeral notes contract. Tracks note creation and redemption. */
 export class NoteIndexer {
   private notes: Map<Address, DaimoNoteStatus> = new Map();
   private listeners: ((logs: DaimoNoteStatus[]) => void)[] = [];
+  private logCoordinateToNoteEvent: Map<
+    LogCoordinate,
+    [Address, "create" | "claim"]
+  > = new Map();
 
   constructor(private nameReg: NameRegistry) {}
 
@@ -87,6 +96,10 @@ export class NoteIndexer {
           sender,
         };
         this.notes.set(log.ephemeralOwner, newNote);
+        this.logCoordinateToNoteEvent.set(
+          { logIndex: log.logIndex, transactionHash: log.transactionHash },
+          [log.ephemeralOwner, "create"]
+        );
         return newNote;
       });
     return await Promise.all(logs);
@@ -140,6 +153,11 @@ export class NoteIndexer {
           throw new Error(`bad NoteRedeemed, wrong amount: ${logInfo()}`);
         }
         // Mark as redeemed
+
+        this.logCoordinateToNoteEvent.set(
+          { logIndex: log.logIndex, transactionHash: log.transactionHash },
+          [log.ephemeralOwner, "claim"]
+        );
         assertNotNull(log.redeemer, "redeemer is null");
         assertNotNull(log.from, "from is null");
         note.status = log.redeemer === log.from ? "cancelled" : "claimed";
@@ -147,6 +165,14 @@ export class NoteIndexer {
         return note;
       });
     return await Promise.all(logs);
+  }
+
+  getNotebyLogCoordinate(transactionHash: Hex, logIndex: number) {
+    const event = this.logCoordinateToNoteEvent.get({
+      logIndex,
+      transactionHash,
+    });
+    return event;
   }
 
   /** Gets note status, or null if the note is not yet indexed. */

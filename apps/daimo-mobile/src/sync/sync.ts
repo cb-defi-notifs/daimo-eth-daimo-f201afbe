@@ -1,7 +1,9 @@
 import { AccountHistoryResult } from "@daimo/api";
 import {
+  DisplayOpEvent,
   EAccount,
   OpStatus,
+  PaymentLinkOpEvent,
   TransferOpEvent,
   amountToDollars,
   assert,
@@ -275,8 +277,8 @@ function applySync(account: Account, result: AccountHistoryResult): Account {
 
 export function syncFindSameOp(
   opHash: Hex | undefined,
-  ops: TransferOpEvent[]
-): TransferOpEvent | null {
+  ops: (TransferOpEvent | PaymentLinkOpEvent)[]
+): TransferOpEvent | PaymentLinkOpEvent | null {
   if (opHash == null) return null;
   return ops.find((r) => opHash === r.opHash) || null;
 }
@@ -301,10 +303,10 @@ function addNamedAccounts(old: EAccount[], found: EAccount[]): EAccount[] {
 
 /** Add transfers based on new Transfer event logs */
 function addTransfers(
-  old: TransferOpEvent[],
-  logs: TransferOpEvent[],
+  old: DisplayOpEvent[],
+  logs: DisplayOpEvent[],
   daimoChain: DaimoChain
-): TransferOpEvent[] {
+): DisplayOpEvent[] {
   // Start with old, finalized transfers
   const ret = [...old];
 

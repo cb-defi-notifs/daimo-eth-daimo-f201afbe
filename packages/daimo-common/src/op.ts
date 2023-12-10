@@ -16,7 +16,9 @@ import { Address, Hex } from "viem";
  * - Adding or removing a device (AddDevice / RemoveDevice log, userop)
  * - Creating or redeeming a Note (NoteCreated / NoteRedeemed log, userop)
  */
-export type OpEvent = TransferOpEvent | KeyRotationOpEvent;
+export type OpEvent = TransferOpEvent | PaymentLinkOpEvent | KeyRotationOpEvent;
+
+export type DisplayOpEvent = TransferOpEvent | PaymentLinkOpEvent;
 
 /**
  * Represents a transfer of tokens from one address to another.
@@ -57,6 +59,21 @@ export interface TransferOpEvent extends OpEventBase {
   amount: number;
 
   /** Userop nonce, if this transfer occurred in a userop */
+  nonceMetadata?: Hex;
+}
+
+export interface PaymentLinkOpEvent extends OpEventBase {
+  type: "createLink" | "claimLink";
+
+  from: Address;
+  to: Address;
+
+  /** TODO: use bigint? Unnecessary for USDC. MAX_SAFE_INT = $9,007,199,254 */
+  amount: number;
+
+  ephemeralOwner: Address;
+
+  /** Userop nonce, if this link occurred in a userop */
   nonceMetadata?: Hex;
 }
 

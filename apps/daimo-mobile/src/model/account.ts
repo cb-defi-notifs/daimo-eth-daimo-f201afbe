@@ -2,11 +2,12 @@ import { SuggestedAction } from "@daimo/api";
 import {
   ChainGasConstants,
   DaimoLinkNote,
+  DisplayOpEvent,
   EAccount,
   KeyData,
   KeyRotationOpEvent,
+  PaymentLinkOpEvent,
   RecommendedExchange,
-  TrackedNote,
   TrackedRequest,
   TransferOpEvent,
   assert,
@@ -51,11 +52,9 @@ export type Account = {
   /** The latest finalized block as of the most recent sync. */
   lastFinalizedBlock: number;
   /** Transfers to/from other Daimo accounts & other Ethereum accounts. */
-  recentTransfers: TransferOpEvent[];
+  recentTransfers: DisplayOpEvent[];
   /** Requests sent from this account. */
   trackedRequests: TrackedRequest[];
-  /** Payment links created by this account, but not yet claimed. */
-  pendingNotes: TrackedNote[];
   /** Names for each Daimo account we've interacted with. */
   namedAccounts: EAccount[];
   /** P-256 keys authorised by the Daimo account, in DER format */
@@ -200,6 +199,35 @@ interface AccountV11 extends StoredModel {
   pushToken: string | null;
 }
 
+interface AccountV12 extends StoredModel {
+  storageVersion: 12;
+
+  enclaveKeyName: string;
+  enclavePubKey: Hex;
+  name: string;
+  address: string;
+
+  homeChainId: number;
+  homeCoinAddress: Address;
+
+  lastBlock: number;
+  lastBlockTimestamp: number;
+  lastBalance: string;
+  lastFinalizedBlock: number;
+  recentTransfers: (TransferOpEvent | PaymentLinkOpEvent)[];
+  trackedRequests: TrackedRequest[];
+  namedAccounts: EAccount[];
+  accountKeys: KeyData[];
+  pendingKeyRotation: KeyRotationOpEvent[];
+  recommendedExchanges: RecommendedExchange[];
+  suggestedActions: SuggestedAction[];
+  dismissedActionIDs: string[];
+
+  chainGasConstants: ChainGasConstants;
+
+  pushToken: string | null;
+}
+
 /** Loads and saves Daimo account data from storage. Notifies listeners. */
 export function getAccountManager(): AccountManager {
   if (_accountManager == null) {
@@ -307,7 +335,6 @@ export function parseAccount(accountJSON?: string): Account | null {
       trackedRequests: a.trackedRequests,
       namedAccounts: a.namedAccounts,
       accountKeys: a.accountKeys,
-      pendingNotes: a.pendingNotes || [],
       pendingKeyRotation: [],
       recommendedExchanges: [],
       suggestedActions: [],
@@ -338,7 +365,6 @@ export function parseAccount(accountJSON?: string): Account | null {
       trackedRequests: a.trackedRequests,
       namedAccounts: a.namedAccounts,
       accountKeys: a.accountKeys,
-      pendingNotes: a.pendingNotes,
       pendingKeyRotation: a.pendingKeyRotation,
       recommendedExchanges: [],
       suggestedActions: [],
@@ -369,7 +395,6 @@ export function parseAccount(accountJSON?: string): Account | null {
       trackedRequests: a.trackedRequests,
       namedAccounts: a.namedAccounts,
       accountKeys: a.accountKeys,
-      pendingNotes: a.pendingNotes,
       pendingKeyRotation: a.pendingKeyRotation,
       recommendedExchanges: a.recommendedExchanges,
       suggestedActions: [],
@@ -379,10 +404,40 @@ export function parseAccount(accountJSON?: string): Account | null {
 
       pushToken: a.pushToken,
     };
-  }
+  } else if (model.storageVersion === 11) {
+    console.log(`[ACCOUNT] MIGRATING v${model.storageVersion} account`);
+    const a = model as AccountV11;
 
-  assert(model.storageVersion === 11);
-  const a = model as AccountV11;
+    return {
+      enclaveKeyName: a.enclaveKeyName,
+      enclavePubKey: a.enclavePubKey,
+      name: a.name,
+      address: getAddress(a.address),
+
+      homeChainId: a.homeChainId,
+      homeCoinAddress: getAddress(a.homeCoinAddress),
+
+      lastBalance: BigInt(a.lastBalance),
+      lastBlock: a.lastBlock,
+      lastBlockTimestamp: a.lastBlockTimestamp,
+      lastFinalizedBlock: a.lastFinalizedBlock,
+
+      recentTransfers: a.recentTransfers,
+      trackedRequests: a.trackedRequests,
+      namedAccounts: a.namedAccounts,
+      accountKeys: a.accountKeys,
+      pendingKeyRotation: a.pendingKeyRotation,
+      recommendedExchanges: a.recommendedExchanges,
+      suggestedActions: a.suggestedActions,
+      dismissedActionIDs: a.dismissedActionIDs,
+
+      chainGasConstants: a.chainGasConstants,
+
+      pushToken: a.pushToken,
+    };
+  }
+  assert(model.storageVersion === 12, "Unknown account storage version");
+  const a = model as AccountV12;
 
   return {
     enclaveKeyName: a.enclaveKeyName,
@@ -402,7 +457,6 @@ export function parseAccount(accountJSON?: string): Account | null {
     trackedRequests: a.trackedRequests,
     namedAccounts: a.namedAccounts,
     accountKeys: a.accountKeys,
-    pendingNotes: a.pendingNotes,
     pendingKeyRotation: a.pendingKeyRotation,
     recommendedExchanges: a.recommendedExchanges,
     suggestedActions: a.suggestedActions,
@@ -417,8 +471,8 @@ export function parseAccount(accountJSON?: string): Account | null {
 export function serializeAccount(account: Account | null): string {
   if (!account) return "";
 
-  const model: AccountV11 = {
-    storageVersion: 11,
+  const model: AccountV12 = {
+    storageVersion: 12,
 
     enclaveKeyName: account.enclaveKeyName,
     enclavePubKey: account.enclavePubKey,
@@ -435,7 +489,6 @@ export function serializeAccount(account: Account | null): string {
 
     recentTransfers: account.recentTransfers,
     trackedRequests: account.trackedRequests,
-    pendingNotes: account.pendingNotes,
     namedAccounts: account.namedAccounts,
     accountKeys: account.accountKeys,
     pendingKeyRotation: account.pendingKeyRotation,

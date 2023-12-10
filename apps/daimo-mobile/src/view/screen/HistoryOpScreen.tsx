@@ -1,11 +1,12 @@
 import {
   amountToDollars,
+  DaimoLinkNoteV2,
   DaimoNoteStatus,
   EAccount,
+  DisplayOpEvent,
   OpStatus,
+  PaymentLinkOpEvent,
   timeString,
-  TrackedNote,
-  TransferOpEvent,
 } from "@daimo/common";
 import { ChainConfig, daimoChainFromId } from "@daimo/contract";
 import { DaimoNonceMetadata } from "@daimo/userop";
@@ -57,17 +58,7 @@ function HistoryOpScreenInner({
   let { op } = route.params;
   op = syncFindSameOp(op.opHash, account.recentTransfers) || op;
 
-  // If we sent a note, show the note screen.
-  // TODO: annotate note info directly on op via sync
-  // This approach works, but means we can never expire "pendingNotes"
-  // even when they are no longer pending.
-  const pendingNote =
-    op.opHash && account.pendingNotes.find((n) => n.opHash === op.opHash);
-
   const { chainConfig } = env(daimoChainFromId(account.homeChainId));
-
-  const shouldShowNote =
-    pendingNote && [OpStatus.confirmed, OpStatus.finalized].includes(op.status);
 
   return (
     <View style={ss.container.screen}>
@@ -81,14 +72,29 @@ function HistoryOpScreenInner({
         )}
       </View>
       <Spacer h={16} />
-      {shouldShowNote && <NoteView account={account} note={pendingNote} />}
+      {op.type === "createLink" &&
+        [OpStatus.confirmed, OpStatus.finalized].includes(op.status) && (
+          <NoteView account={account} note={op} />
+        )}
     </View>
   );
 }
 
-function NoteView({ account, note }: { account: Account; note: TrackedNote }) {
+function NoteView({
+  account,
+  note,
+}: {
+  account: Account;
+  note: PaymentLinkOpEvent;
+}) {
   const daimoChain = daimoChainFromId(account.homeChainId);
-  const noteFetch = useFetchLinkStatus(note, daimoChain)!;
+  const link: DaimoLinkNoteV2 = {
+    type: "notev2",
+    sender: note.from,
+    dollars: amountToDollars(note.amount),
+    seed: "",
+  };
+  const noteFetch = useFetchLinkStatus(link, daimoChain)!;
   const noteStatus = noteFetch.data as DaimoNoteStatus | undefined;
 
   return (
@@ -130,7 +136,7 @@ function TransferBody({
   op,
 }: {
   account: Account;
-  op: TransferOpEvent;
+  op: DisplayOpEvent;
 }) {
   const opRequestId = op.nonceMetadata
     ? DaimoNonceMetadata.fromHex(op.nonceMetadata)?.identifier.toString()

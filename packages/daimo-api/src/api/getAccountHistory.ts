@@ -1,10 +1,10 @@
 import { generateOnRampURL } from "@coinbase/cbpay-js";
 import {
   ChainGasConstants,
+  DisplayOpEvent,
   EAccount,
   KeyData,
   RecommendedExchange,
-  TransferOpEvent,
   assert,
   hasAccountName,
 } from "@daimo/common";
@@ -29,7 +29,7 @@ export interface AccountHistoryResult {
   chainGasConstants: ChainGasConstants;
   recommendedExchanges: RecommendedExchange[];
 
-  transferLogs: TransferOpEvent[];
+  transferLogs: DisplayOpEvent[];
   namedAccounts: EAccount[];
   accountKeys: KeyData[];
 

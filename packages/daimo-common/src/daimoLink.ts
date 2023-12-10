@@ -15,6 +15,7 @@ export type DaimoLink =
   | DaimoLinkAccount
   | DaimoLinkRequest
   | DaimoLinkNote
+  | DaimoLinkNoteV2
   | DaimoLinkSettings;
 
 /** Represents any Ethereum address */
@@ -44,6 +45,14 @@ export type DaimoLinkNote = {
   ephemeralOwner: Address;
   /** The ephemeral (burner) private key, from the hash portion of the URL. */
   ephemeralPrivateKey?: Hex;
+};
+
+export type DaimoLinkNoteV2 = {
+  type: "notev2";
+
+  sender: string;
+  dollars: DollarStr;
+  seed: string;
 };
 
 export type DaimoLinkSettings = {
@@ -83,6 +92,14 @@ function formatDaimoLinkInner(link: DaimoLink, linkBase: string): string {
         link.previewSender,
         link.previewDollars,
         link.ephemeralOwner + (hash || ""),
+      ].join("/");
+    }
+    case "notev2": {
+      return [
+        linkBase,
+        "note",
+        link.sender,
+        link.dollars + `#${link.seed}`,
       ].join("/");
     }
     case "settings": {
@@ -138,32 +155,42 @@ function parseDaimoLinkInner(link: string): DaimoLink | null {
       return { type: "request", requestId, recipient, dollars };
     }
     case "note": {
-      let previewSender: string, previewDollars: `${number}`, ephem: string;
-      if (parts.length === 2) {
-        // backcompat with old notes
-        [previewSender, previewDollars] = ["unknown", "0.00"];
-        ephem = parts[1];
-      } else if (parts.length === 4) {
-        previewSender = parts[1];
+      if (parts.length === 4) {
+        // backcompat with old links
+        const previewSender = parts[1];
         const parsedDollars = zDollarStr.safeParse(parts[2]);
         if (!parsedDollars.success) return null;
-        previewDollars = parseFloat(parsedDollars.data).toFixed(2) as DollarStr;
-        ephem = parts[3];
+        const previewDollars = parseFloat(parsedDollars.data).toFixed(
+          2
+        ) as DollarStr;
+        const hashParts = parts[3].split("#");
+        if (hashParts.length > 2) return null;
+        const ephemeralOwner = getAddress(hashParts[0]);
+        const ephemeralPrivateKey =
+          hashParts.length < 2 ? undefined : zHex.parse(hashParts[1]);
+        return {
+          type: "note",
+          previewSender,
+          previewDollars,
+          ephemeralOwner,
+          ephemeralPrivateKey,
+        };
+      } else if (parts.length === 3) {
+        // new links
+        const sender = parts[1];
+        const hashParts = parts[2].split("#");
+        if (hashParts.length > 2) return null;
+        const parsedDollars = zDollarStr.safeParse(hashParts[0]);
+        if (!parsedDollars.success) return null;
+        const dollars = parseFloat(parsedDollars.data).toFixed(2) as DollarStr;
+        const seed = hashParts[1];
+        return {
+          type: "notev2",
+          sender,
+          dollars,
+          seed,
+        };
       } else return null;
-
-      // Parse ephemeral owner and private key
-      const hashParts = ephem.split("#");
-      if (hashParts.length > 2) return null;
-      const ephemeralOwner = getAddress(hashParts[0]);
-      const ephemeralPrivateKey =
-        hashParts.length < 2 ? undefined : zHex.parse(hashParts[1]);
-      return {
-        type: "note",
-        previewSender,
-        previewDollars,
-        ephemeralOwner,
-        ephemeralPrivateKey,
-      };
     }
     case "settings": {
       if (!["add-device", "add-passkey", undefined].includes(parts[1])) {

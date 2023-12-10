@@ -4,7 +4,7 @@ import {
   DaimoLinkNote,
   DaimoLinkRequest,
   EAccount,
-  TransferOpEvent,
+  DisplayOpEvent,
   parseDaimoLink,
 } from "@daimo/common";
 import { NavigatorScreenParams, useNavigation } from "@react-navigation/native";
@@ -22,7 +22,7 @@ export type ParamListHome = {
   Home: undefined;
   QR: { option: QRScreenOptions | undefined };
   Account: { eAcc: EAccount } | { link: DaimoLinkAccount };
-  HistoryOp: { op: TransferOpEvent };
+  HistoryOp: { op: DisplayOpEvent };
 };
 
 export type ParamListSend = {
@@ -31,7 +31,7 @@ export type ParamListSend = {
   QR: { option: QRScreenOptions | undefined };
   SendLink: { lagAutoFocus: boolean };
   Account: { eAcc: EAccount };
-  HistoryOp: { op: TransferOpEvent };
+  HistoryOp: { op: DisplayOpEvent };
 };
 
 export type ParamListReceive = {

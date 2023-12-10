@@ -149,13 +149,14 @@ function NoteDisplayInner({
     dollarsToSend: 0,
     sendFn,
     pendingOp: {
-      type: "transfer",
+      type: "claimLink",
       status: OpStatus.pending,
       from: daimoEphemeralNotesAddress,
       to: account.address,
       amount: Number(dollarsToAmount(noteStatus.dollars)),
       timestamp: Date.now() / 1e3,
       nonceMetadata: nonceMetadata.toHex(),
+      ephemeralOwner,
     },
     accountTransform: transferAccountTransform([
       {
