@@ -32,7 +32,7 @@ type TitleDesc = {
   walletActionLinkStatus?: DaimoLinkStatus;
 };
 
-const defaultMeta = metadata("Daimo", "Payments on Ethereum");
+const defaultMeta = metadata("Daimo", "Payments on Ethereum", "");
 
 function getUrl(props: LinkProps): string {
   const path = (props.params.slug || []).join("/");
@@ -50,7 +50,7 @@ export async function generateMetadata(props: LinkProps): Promise<Metadata> {
   const { name, action, dollars } = titleDesc;
   const prefixedDollars = dollars && `$${dollars}`;
   const title = [name, action, prefixedDollars].filter((x) => x).join(" ");
-  return metadata(title, titleDesc.description);
+  return metadata(title, titleDesc.description, getDirectDeeplink(props));
 }
 
 export default async function LinkPage(props: LinkProps) {
@@ -97,7 +97,11 @@ async function LinkPageInner(props: LinkProps) {
   );
 }
 
-function metadata(title: string, description: string): Metadata {
+function metadata(
+  title: string,
+  description: string,
+  directDeepLink: string
+): Metadata {
   return {
     title,
     description,
@@ -115,6 +119,16 @@ function metadata(title: string, description: string): Metadata {
         },
       ],
       type: "website",
+    },
+    appLinks: {
+      ios: {
+        app_store_id: "6459700343",
+        url: directDeepLink,
+      },
+      android: {
+        package: "com.daimo",
+        url: directDeepLink,
+      },
     },
   };
 }
