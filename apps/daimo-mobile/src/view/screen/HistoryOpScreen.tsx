@@ -5,8 +5,9 @@ import {
   EAccount,
   DisplayOpEvent,
   OpStatus,
-  PaymentLinkOpEvent,
   timeString,
+  PaymentLinkOpEvent,
+  getAccountName,
 } from "@daimo/common";
 import { ChainConfig, daimoChainFromId } from "@daimo/contract";
 import { DaimoNonceMetadata } from "@daimo/userop";
@@ -90,7 +91,8 @@ function NoteView({
   const daimoChain = daimoChainFromId(account.homeChainId);
   const link: DaimoLinkNoteV2 = {
     type: "notev2",
-    sender: note.from,
+    seq: note.noteStatus!.seq!,
+    sender: getAccountName(note.noteStatus!.sender),
     dollars: amountToDollars(note.amount),
     seed: "",
   };

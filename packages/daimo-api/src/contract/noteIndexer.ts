@@ -17,6 +17,8 @@ type LogCoordinate = {
 
 /* Ephemeral notes contract. Tracks note creation and redemption. */
 export class NoteIndexer {
+  private senderToSeqOwners: Map<Address, Address[]> = new Map();
+
   private notes: Map<Address, DaimoNoteStatus> = new Map();
   private listeners: ((logs: DaimoNoteStatus[]) => void)[] = [];
   private logCoordinateToNoteEvent: Map<
@@ -60,49 +62,58 @@ export class NoteIndexer {
         where block_num >= $1
         and block_num <= $2
         and chain_id = $3
+        order by (block_num, tx_idx, log_idx) asc
     `,
       [from, to, chainConfig.chainL2.id]
     );
-    const logs = result.rows
-      .map((r) => {
-        return {
-          transactionHash: bytesToHex(r.tx_hash, { size: 32 }),
-          logIndex: r.log_idx,
-          from: getAddress(bytesToHex(r.f, { size: 20 })),
-          ephemeralOwner: getAddress(
-            bytesToHex(r.ephemeral_owner, { size: 20 })
-          ),
-          amount: BigInt(r.amount),
-        };
-      })
-      .map(async (log) => {
-        console.log(`[NOTE] NoteCreated ${log.ephemeralOwner}`);
-        if (this.notes.get(log.ephemeralOwner) != null) {
-          throw new Error(
-            `dupe NoteCreated: ${log.ephemeralOwner} ${log.transactionHash} ${log.logIndex}`
-          );
-        }
-        const sender = await this.nameReg.getEAccount(log.from);
-        const dollars = amountToDollars(log.amount);
-        const newNote: DaimoNoteStatus = {
-          status: "confirmed",
-          dollars,
-          link: {
-            type: "note",
-            previewSender: getEAccountStr(sender),
-            previewDollars: dollars,
-            ephemeralOwner: log.ephemeralOwner,
-          },
-          sender,
-        };
-        this.notes.set(log.ephemeralOwner, newNote);
-        this.logCoordinateToNoteEvent.set(
-          { logIndex: log.logIndex, transactionHash: log.transactionHash },
-          [log.ephemeralOwner, "create"]
+    const logs = result.rows.map((r) => {
+      return {
+        transactionHash: bytesToHex(r.tx_hash, { size: 32 }),
+        logIndex: r.log_idx,
+        from: getAddress(bytesToHex(r.f, { size: 20 })),
+        ephemeralOwner: getAddress(bytesToHex(r.ephemeral_owner, { size: 20 })),
+        amount: BigInt(r.amount),
+      };
+    });
+
+    const notes: DaimoNoteStatus[] = [];
+    for (const log of logs) {
+      console.log(`[NOTE] NoteCreated ${log.ephemeralOwner}`);
+      if (this.notes.get(log.ephemeralOwner) != null) {
+        throw new Error(
+          `dupe NoteCreated: ${log.ephemeralOwner} ${log.transactionHash} ${log.logIndex}`
         );
-        return newNote;
-      });
-    return await Promise.all(logs);
+      }
+      const seq = this.getNextSeq(log.from);
+      const sender = await this.nameReg.getEAccount(log.from);
+      const dollars = amountToDollars(log.amount);
+      const newNote: DaimoNoteStatus = {
+        status: "confirmed",
+        dollars,
+        seq,
+        ephemeralOwner: log.ephemeralOwner,
+        link: {
+          type: "notev2",
+          seq,
+          sender: getEAccountStr(sender),
+          dollars,
+        },
+        sender,
+      };
+      this.notes.set(log.ephemeralOwner, newNote);
+
+      this.senderToSeqOwners.set(log.from, [
+        ...(this.senderToSeqOwners.get(log.from) || []),
+        log.ephemeralOwner,
+      ]);
+
+      this.logCoordinateToNoteEvent.set(
+        { logIndex: log.logIndex, transactionHash: log.transactionHash },
+        [log.ephemeralOwner, "create"]
+      );
+      notes.push(newNote);
+    }
+    return notes;
   }
 
   private async loadRedeemed(
@@ -131,7 +142,7 @@ export class NoteIndexer {
         return {
           transactionHash: bytesToHex(r.tx_hash, { size: 32 }),
           logIndex: r.log_idx,
-          from: bytesToHex(r.f, { size: 20 }),
+          from: getAddress(bytesToHex(r.f, { size: 20 })),
           redeemer: getAddress(bytesToHex(r.redeemer, { size: 20 })),
           ephemeralOwner: getAddress(
             bytesToHex(r.ephemeral_owner, { size: 20 })
@@ -167,19 +178,28 @@ export class NoteIndexer {
     return await Promise.all(logs);
   }
 
-  getNotebyLogCoordinate(transactionHash: Hex, logIndex: number) {
-    const event = this.logCoordinateToNoteEvent.get({
+  getNoteStatusByOwner(ephemeralOwner: Address): DaimoNoteStatus | null {
+    return this.notes.get(ephemeralOwner) || null;
+  }
+
+  getNoteStatusbyLogCoordinate(transactionHash: Hex, logIndex: number) {
+    const eve = this.logCoordinateToNoteEvent.get({
       logIndex,
       transactionHash,
     });
-    return event;
+    return eve ? [this.getNoteStatusByOwner(eve[0]), eve[1]] : null;
   }
 
   /** Gets note status, or null if the note is not yet indexed. */
-  async getNoteStatus(
-    ephemeralOwner: Address
-  ): Promise<DaimoNoteStatus | null> {
-    const ret = this.notes.get(ephemeralOwner);
+  getNoteStatusBySeq(sender: Address, seq: number) {
+    const owners = this.senderToSeqOwners.get(sender);
+    const ephemeralOwner = owners ? owners[seq] : null;
+    console.log(`[NOTE] getNoteStatusBySeq ${sender} ${seq} ${ephemeralOwner}`);
+    const ret = ephemeralOwner && this.notes.get(ephemeralOwner);
     return ret || null;
+  }
+
+  getNextSeq(sender: Address) {
+    return this.senderToSeqOwners.get(sender)?.length || 0;
   }
 }

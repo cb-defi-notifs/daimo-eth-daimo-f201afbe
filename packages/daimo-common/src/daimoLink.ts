@@ -52,7 +52,8 @@ export type DaimoLinkNoteV2 = {
 
   sender: string;
   dollars: DollarStr;
-  seed: string;
+  seq: number;
+  seed?: string;
 };
 
 export type DaimoLinkSettings = {
@@ -95,11 +96,13 @@ function formatDaimoLinkInner(link: DaimoLink, linkBase: string): string {
       ].join("/");
     }
     case "notev2": {
+      const hash = link.seed && `#${link.seed}`;
       return [
         linkBase,
-        "note",
+        "n",
         link.sender,
-        link.dollars + `#${link.seed}`,
+        link.dollars,
+        link.seq + (hash || ""),
       ].join("/");
     }
     case "settings": {
@@ -175,19 +178,26 @@ function parseDaimoLinkInner(link: string): DaimoLink | null {
           ephemeralOwner,
           ephemeralPrivateKey,
         };
-      } else if (parts.length === 3) {
-        // new links
+      } else return null;
+    }
+    case "n": {
+      // new links
+      if (parts.length === 4) {
         const sender = parts[1];
-        const hashParts = parts[2].split("#");
-        if (hashParts.length > 2) return null;
-        const parsedDollars = zDollarStr.safeParse(hashParts[0]);
+
+        const parsedDollars = zDollarStr.safeParse(parts[2]);
         if (!parsedDollars.success) return null;
         const dollars = parseFloat(parsedDollars.data).toFixed(2) as DollarStr;
+
+        const hashParts = parts[3].split("#");
+        if (hashParts.length > 2) return null;
+        const seq = parseInt(hashParts[0], 10);
         const seed = hashParts[1];
         return {
           type: "notev2",
           sender,
           dollars,
+          seq,
           seed,
         };
       } else return null;

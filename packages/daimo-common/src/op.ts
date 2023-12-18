@@ -1,5 +1,7 @@
 import { Address, Hex } from "viem";
 
+import { DaimoNoteStatus } from "./daimoLinkStatus";
+
 /**
  * An OpEvent is an onchain event affecting a Daimo account. Each OpEvent
  * corresponds to an Ethereum event log. Usually--but not always--it is also
@@ -71,7 +73,7 @@ export interface PaymentLinkOpEvent extends OpEventBase {
   /** TODO: use bigint? Unnecessary for USDC. MAX_SAFE_INT = $9,007,199,254 */
   amount: number;
 
-  ephemeralOwner: Address;
+  noteStatus: DaimoNoteStatus;
 
   /** Userop nonce, if this link occurred in a userop */
   nonceMetadata?: Hex;

@@ -1,7 +1,7 @@
 import {
+  PaymentLinkOpEvent,
   DisplayOpEvent,
   OpStatus,
-  PaymentLinkOpEvent,
   TransferOpEvent,
   guessTimestampFromNum,
 } from "@daimo/common";
@@ -175,7 +175,7 @@ export class CoinIndexer {
           numberToHex(userOp.nonce, { size: 32 })
         )?.metadata.toHex()
       : undefined;
-    const noteInfo = this.noteIndexer.getNotebyLogCoordinate(
+    const noteInfo = this.noteIndexer.getNoteStatusbyLogCoordinate(
       transactionHash,
       logIndex - 1
     );
@@ -206,17 +206,17 @@ export class CoinIndexer {
         } as TransferOpEvent;
       }
 
-      const [noteOwner, noteEventType] = noteInfo;
+      const [noteStatus, noteEventType] = noteInfo;
       if (noteEventType === "create") {
         return {
           type: "createLink",
-          ephemeralOwner: noteOwner,
+          noteStatus,
           ...partialOp,
         } as PaymentLinkOpEvent;
       } else if (noteEventType === "claim") {
         return {
           type: "claimLink",
-          ephemeralOwner: noteOwner,
+          noteStatus,
           ...partialOp,
         } as PaymentLinkOpEvent;
       } else {

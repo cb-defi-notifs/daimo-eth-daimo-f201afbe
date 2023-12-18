@@ -3,8 +3,6 @@ import {
   DisplayOpEvent,
   EAccount,
   OpStatus,
-  PaymentLinkOpEvent,
-  TransferOpEvent,
   amountToDollars,
   assert,
   guessTimestampFromNum,
@@ -220,6 +218,13 @@ function applySync(account: Account, result: AccountHistoryResult): Account {
   );
   recentTransfers.push(...stillPending);
 
+  const nextNoteSeq = Math.max(
+    result.nextNoteSeq,
+    ...stillPending.map((op) =>
+      op.type === "createLink" ? (op.noteStatus?.seq || 0) + 1 : 0
+    )
+  );
+
   let namedAccounts: EAccount[];
   if (result.sinceBlockNum === 0) {
     // If resyncing from scratch,  reset named accounts
@@ -247,6 +252,7 @@ function applySync(account: Account, result: AccountHistoryResult): Account {
     lastBlock: result.lastBlock,
     lastBlockTimestamp: result.lastBlockTimestamp,
     lastFinalizedBlock: result.lastFinalizedBlock,
+    nextNoteSeq,
 
     chainGasConstants: result.chainGasConstants,
     recommendedExchanges: result.recommendedExchanges || [],
@@ -269,6 +275,7 @@ function applySync(account: Account, result: AccountHistoryResult): Account {
         newBlock: result.lastBlock,
         newBalance: amountToDollars(BigInt(result.lastBalance)),
         newTransfers: recentTransfers.length,
+        nextNoteSeq,
         nPending: recentTransfers.filter((t) => t.status === "pending").length,
       })
   );
@@ -277,8 +284,8 @@ function applySync(account: Account, result: AccountHistoryResult): Account {
 
 export function syncFindSameOp(
   opHash: Hex | undefined,
-  ops: (TransferOpEvent | PaymentLinkOpEvent)[]
-): TransferOpEvent | PaymentLinkOpEvent | null {
+  ops: DisplayOpEvent[]
+): DisplayOpEvent | null {
   if (opHash == null) return null;
   return ops.find((r) => opHash === r.opHash) || null;
 }

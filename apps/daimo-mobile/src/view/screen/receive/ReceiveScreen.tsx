@@ -23,6 +23,7 @@ import { ScreenHeader, useExitToHome } from "../../shared/ScreenHeader";
 import Spacer from "../../shared/Spacer";
 import {
   ParamListReceive,
+  navResetToHome,
   useFocusOnScreenTransitionEnd,
   useNav,
 } from "../../shared/nav";
@@ -86,7 +87,7 @@ function RequestScreenInner({
         console.log(`[REQUEST] shared, activityType: ${result.activityType}`);
         setStatus("sent");
         trackRequest(requestId, dollars);
-        nav.navigate("HomeTab", { screen: "Home" });
+        navResetToHome(nav);
       } else if (result.action === Share.dismissedAction) {
         // Only on iOS
         console.log(`[REQUEST] share dismissed`);

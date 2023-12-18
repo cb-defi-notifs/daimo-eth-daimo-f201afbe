@@ -13,6 +13,7 @@ import { Address, hexToBytes } from "viem";
 import { CoinIndexer } from "../contract/coinIndexer";
 import { KeyRegistry } from "../contract/keyRegistry";
 import { NameRegistry } from "../contract/nameRegistry";
+import { NoteIndexer } from "../contract/noteIndexer";
 import { Paymaster } from "../contract/paymaster";
 import { ViemClient } from "../network/viemClient";
 import { Watcher } from "../shovel/watcher";
@@ -25,6 +26,7 @@ export interface AccountHistoryResult {
   lastBlock: number;
   lastBlockTimestamp: number;
   lastBalance: `${bigint}`;
+  nextNoteSeq: number;
 
   chainGasConstants: ChainGasConstants;
   recommendedExchanges: RecommendedExchange[];
@@ -55,6 +57,7 @@ export async function getAccountHistory(
   watcher: Watcher,
   vc: ViemClient,
   coinIndexer: CoinIndexer,
+  noteIndexer: NoteIndexer,
   nameReg: NameRegistry,
   keyReg: KeyRegistry,
   paymaster: Paymaster
@@ -80,6 +83,8 @@ export async function getAccountHistory(
   const lastBlock = Number(lastBlk.number);
   const lastBlockTimestamp = lastBlk.timestamp;
   const lastBalance = await coinIndexer.getBalanceAt(address, lastBlock);
+
+  const nextNoteSeq = await noteIndexer.getNextSeq(address);
 
   // TODO: get userops, including reverted ones. Show failed sends.
 
@@ -121,6 +126,7 @@ export async function getAccountHistory(
     lastBlock,
     lastBlockTimestamp,
     lastBalance: `${lastBalance}`,
+    nextNoteSeq,
 
     chainGasConstants,
     recommendedExchanges,

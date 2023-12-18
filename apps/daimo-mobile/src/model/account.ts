@@ -6,7 +6,6 @@ import {
   EAccount,
   KeyData,
   KeyRotationOpEvent,
-  PaymentLinkOpEvent,
   RecommendedExchange,
   TrackedRequest,
   TransferOpEvent,
@@ -48,6 +47,8 @@ export type Account = {
   lastBlockTimestamp: number;
   /** Balance as of lastBlock */
   lastBalance: bigint;
+  /** Next payment link sequence number */
+  nextNoteSeq: number;
 
   /** The latest finalized block as of the most recent sync. */
   lastFinalizedBlock: number;
@@ -214,7 +215,8 @@ interface AccountV12 extends StoredModel {
   lastBlockTimestamp: number;
   lastBalance: string;
   lastFinalizedBlock: number;
-  recentTransfers: (TransferOpEvent | PaymentLinkOpEvent)[];
+  nextNoteSeq: number;
+  recentTransfers: DisplayOpEvent[];
   trackedRequests: TrackedRequest[];
   namedAccounts: EAccount[];
   accountKeys: KeyData[];
@@ -330,6 +332,7 @@ export function parseAccount(accountJSON?: string): Account | null {
       lastBlock: a.lastBlock,
       lastBlockTimestamp: a.lastBlockTimestamp,
       lastFinalizedBlock: a.lastFinalizedBlock,
+      nextNoteSeq: 0,
 
       recentTransfers: a.recentTransfers,
       trackedRequests: a.trackedRequests,
@@ -360,6 +363,7 @@ export function parseAccount(accountJSON?: string): Account | null {
       lastBlock: a.lastBlock,
       lastBlockTimestamp: a.lastBlockTimestamp,
       lastFinalizedBlock: a.lastFinalizedBlock,
+      nextNoteSeq: 0,
 
       recentTransfers: a.recentTransfers,
       trackedRequests: a.trackedRequests,
@@ -390,6 +394,7 @@ export function parseAccount(accountJSON?: string): Account | null {
       lastBlock: a.lastBlock,
       lastBlockTimestamp: a.lastBlockTimestamp,
       lastFinalizedBlock: a.lastFinalizedBlock,
+      nextNoteSeq: 0,
 
       recentTransfers: a.recentTransfers,
       trackedRequests: a.trackedRequests,
@@ -416,6 +421,7 @@ export function parseAccount(accountJSON?: string): Account | null {
 
       homeChainId: a.homeChainId,
       homeCoinAddress: getAddress(a.homeCoinAddress),
+      nextNoteSeq: 0,
 
       lastBalance: BigInt(a.lastBalance),
       lastBlock: a.lastBlock,
@@ -452,6 +458,7 @@ export function parseAccount(accountJSON?: string): Account | null {
     lastBlock: a.lastBlock,
     lastBlockTimestamp: a.lastBlockTimestamp,
     lastFinalizedBlock: a.lastFinalizedBlock,
+    nextNoteSeq: a.nextNoteSeq,
 
     recentTransfers: a.recentTransfers,
     trackedRequests: a.trackedRequests,
@@ -486,6 +493,7 @@ export function serializeAccount(account: Account | null): string {
     lastBlock: account.lastBlock,
     lastBlockTimestamp: account.lastBlockTimestamp,
     lastFinalizedBlock: account.lastFinalizedBlock,
+    nextNoteSeq: account.nextNoteSeq,
 
     recentTransfers: account.recentTransfers,
     trackedRequests: account.trackedRequests,

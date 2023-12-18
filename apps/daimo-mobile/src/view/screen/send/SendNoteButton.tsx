@@ -2,6 +2,7 @@ import {
   AddrLabel,
   DaimoLink,
   EAccount,
+  OpEvent,
   OpStatus,
   dollarsToAmount,
   formatDaimoLink,
@@ -44,10 +45,23 @@ function SendNoteButtonInner({
   dollars: number;
 }) {
   const [noteSeed, noteAddress] = generateNoteSeedAddress();
+  console.log(`[DEBUG] noteSeed ${noteSeed}, noteAddress ${noteAddress}`);
 
   const [nonce] = useState(
     () => new DaimoNonce(new DaimoNonceMetadata(DaimoNonceType.CreateNote))
   );
+
+  const createLinkAccountTransform = (account: Account, pendingOp: OpEvent) => {
+    return {
+      ...transferAccountTransform([
+        {
+          addr: daimoEphemeralNotesAddress,
+          label: AddrLabel.PaymentLink,
+        } as EAccount,
+      ])(account, pendingOp),
+      nextNoteSeq: account.nextNoteSeq + 1,
+    };
+  };
 
   const { status, message, cost, exec } = useSendAsync({
     dollarsToSend: dollars,
@@ -65,14 +79,22 @@ function SendNoteButtonInner({
       amount: Number(dollarsToAmount(dollars)),
       timestamp: Date.now() / 1e3,
       nonceMetadata: nonce.metadata.toHex(),
-      ephemeralOwner: noteAddress,
+      noteStatus: {
+        link: {
+          type: "notev2",
+          sender: account.name,
+          dollars: `${dollars}`,
+          seq: account.nextNoteSeq,
+          seed: noteSeed,
+        },
+        status: "pending",
+        sender: { addr: account.address, name: account.name },
+        dollars: `${dollars}`,
+        ephemeralOwner: noteAddress,
+        seq: account.nextNoteSeq,
+      },
     },
-    accountTransform: transferAccountTransform([
-      {
-        addr: daimoEphemeralNotesAddress,
-        label: AddrLabel.PaymentLink,
-      } as EAccount,
-    ]),
+    accountTransform: createLinkAccountTransform,
   });
 
   const sendDisabledReason =
@@ -113,6 +135,7 @@ function SendNoteButtonInner({
         type: "notev2",
         sender: account.name,
         dollars: `${dollars}`,
+        seq: account.nextNoteSeq,
         seed: noteSeed,
       };
       const url = formatDaimoLink(link);

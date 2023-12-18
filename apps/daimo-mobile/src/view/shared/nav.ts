@@ -6,6 +6,7 @@ import {
   EAccount,
   DisplayOpEvent,
   parseDaimoLink,
+  DaimoLinkNoteV2,
 } from "@daimo/common";
 import { NavigatorScreenParams, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -37,7 +38,7 @@ export type ParamListSend = {
 export type ParamListReceive = {
   Receive: { autoFocus: boolean };
   RequestSend: undefined;
-  Note: { link: DaimoLinkNote };
+  Note: { link: DaimoLinkNote | DaimoLinkNoteV2 };
 };
 
 export type ParamListSettings = {
@@ -132,6 +133,10 @@ async function goTo(nav: MainNav, link: DaimoLink) {
       break;
     }
     case "note": {
+      nav.navigate("ReceiveTab", { screen: "Note", params: { link } });
+      break;
+    }
+    case "notev2": {
       nav.navigate("ReceiveTab", { screen: "Note", params: { link } });
       break;
     }
