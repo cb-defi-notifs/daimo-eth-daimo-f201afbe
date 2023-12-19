@@ -85,7 +85,8 @@ export class BundlerClient {
       // Simultanously get the opHash (view function) and submit the bundle
       const [opHash] = await Promise.all([
         this.getOpHash(op, viemClient.publicClient),
-        this.sendCompressedOpToBulk(compressed, viemClient),
+        // this.sendCompressedOpToBulk(compressed, viemClient),
+        this.sendCompressedOpToPimlico(compressed),
       ]);
 
       if (this.opIndexer) {
@@ -140,6 +141,16 @@ export class BundlerClient {
       throw new Error("can't compress, inflator info not loaded");
     }
     return compressBundle(op, this.compressionInfo);
+  }
+
+  async sendCompressedOpToPimlico(compressed: Hex) {
+    const { compressionInfo } = this;
+    assert(compressionInfo != null, "can't send compressed, info not loaded");
+
+    const n = compressed.length / 2 - 1;
+    console.log(`[BUNDLER] sending pimlico_sendCompressedOp, ${n} bytes`);
+
+    await this.provider.send("pimlico_sendCompressedOp", [compressed]);
   }
 
   async sendCompressedOpToBulk(compressed: Hex, viemClient: ViemClient) {
