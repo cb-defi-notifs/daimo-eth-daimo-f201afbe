@@ -1,30 +1,43 @@
-import { DaimoAccountCall } from "@daimo/common";
-import { daimoEphemeralNotesAddress, erc20ABI } from "@daimo/contract";
+import {
+  DaimoAccountCall,
+  DaimoLinkStatus,
+  TransferSwapClog,
+  formatDaimoLink,
+  getInviteStatus,
+  retryBackoff,
+} from "@daimo/common";
+import { erc20ABI } from "@daimo/contract";
 import { Address, Hex, encodeFunctionData } from "viem";
 
 import { AccountFactory } from "../contract/accountFactory";
-import { Faucet } from "../contract/faucet";
 import { NameRegistry } from "../contract/nameRegistry";
 import { Paymaster } from "../contract/paymaster";
+import { IndexWatcher } from "../db/indexWatcher";
 import { chainConfig } from "../env";
+import { InviteCodeTracker } from "../offchain/inviteCodeTracker";
+import { InviteGraph } from "../offchain/inviteGraph";
+import { AntiSpam } from "../server/antiSpam";
 import { Telemetry } from "../server/telemetry";
-import { Watcher } from "../shovel/watcher";
-import { retryBackoff } from "../utils/retryBackoff";
+import { TrpcRequestContext } from "../server/trpc";
 
 export async function deployWallet(
+  ctx: TrpcRequestContext,
   name: string,
   pubKeyHex: Hex,
-  invCode: string | undefined,
-  watcher: Watcher,
+  inviteLinkStatus: DaimoLinkStatus,
+  deviceAttestationString: Hex,
+  watcher: IndexWatcher,
   nameReg: NameRegistry,
   accountFactory: AccountFactory,
-  faucet: Faucet,
+  inviteCodeTracker: InviteCodeTracker,
   telemetry: Telemetry,
-  paymaster: Paymaster
-): Promise<Address> {
-  // For now, invite code is required
-  const invCodeSuccess = invCode && (await faucet.useInviteCode(invCode));
-  if (!invCodeSuccess) {
+  paymaster: Paymaster,
+  inviteGraph: InviteGraph
+): Promise<{ address: Address; faucetTransfer?: TransferSwapClog }> {
+  // For now, invite is required
+  const inviteStatus = getInviteStatus(inviteLinkStatus);
+
+  if (!inviteStatus.isValid) {
     throw new Error("Invalid invite code");
   }
 
@@ -40,7 +53,7 @@ export async function deployWallet(
       data: encodeFunctionData({
         abi: erc20ABI,
         functionName: "approve",
-        args: [daimoEphemeralNotesAddress, maxUint256],
+        args: [chainConfig.notesV2Address, maxUint256],
       }),
     },
     {
@@ -57,43 +70,58 @@ export async function deployWallet(
     },
     nameReg.getRegisterNameCall(name), // Register name
   ];
+  const approvals = `Approving ${chainConfig.notesV2Address} and ${chainConfig.pimlicoPaymasterAddress}`;
 
   // TODO: put a check for the counterfactual address on client side so the server is not trusted.
   const address = await accountFactory.getAddress(pubKeyHex, initCalls);
-
-  console.log(`[API] Deploying account for ${name}, address ${address}`);
+  console.log(`[API] Deploying account ${name} at ${address}. ${approvals}`);
   const deployReceipt = await retryBackoff(
     `deployWallet-${name}-${pubKeyHex}`,
-    () => accountFactory.deploy(pubKeyHex, initCalls),
-    5
+    () => accountFactory.deploy(pubKeyHex, initCalls)
   );
 
-  const processed = await watcher.waitFor(deployReceipt.blockNumber, 8);
+  const processed = await watcher.waitFor(Number(deployReceipt.blockNumber), 8);
   if (!processed) {
     console.log(
       `[API] Deploy tx ${deployReceipt.transactionHash} not processed`
     );
   }
 
-  // If it worked, cache the name <> address mapping immediately.
-  if (deployReceipt.status === "success") {
-    nameReg.onSuccessfulRegister(name, address);
-
-    if (invCode && chainConfig.chainL2.testnet) {
-      const dollars = 50;
-      console.log(`[API] faucet req: $${dollars} USDC for ${name} ${address}`);
-      faucet.request(address, dollars); // Kick off in background
-    }
-  } else {
+  if (deployReceipt.status !== "success") {
     throw new Error(`Couldn't create ${name}: ${deployReceipt.status}`);
   }
 
+  // If it worked, process and cache the account metadata in the background.
+  nameReg.onSuccessfulRegister(name, address);
+  inviteGraph.processDeployWallet(address, inviteLinkStatus);
+
+  // Send starter USDC only for invite links, and check for spam.
+  let sendFaucet = false;
+  let faucetTransfer: TransferSwapClog | undefined;
+  if (inviteLinkStatus.link.type === "invite") {
+    const { requestInfo } = ctx;
+    const isTestnet = chainConfig.chainL2.testnet;
+    sendFaucet = isTestnet || (await AntiSpam.shouldSendFaucet(requestInfo));
+
+    const inviteResult = await inviteCodeTracker.useInviteCode(
+      address,
+      deviceAttestationString,
+      inviteLinkStatus.link.code,
+      sendFaucet
+    );
+
+    if (inviteResult.faucetTransfer != null) {
+      faucetTransfer = inviteResult.faucetTransfer;
+    }
+  }
+
   const explorer = chainConfig.chainL2.blockExplorers!.default.url;
+  const inviteMeta = formatDaimoLink(inviteLinkStatus.link);
   const url = `${explorer}/address/${address}`;
   telemetry.recordClippy(
-    `New user ${name} with invite code ${invCode} at ${url}`,
+    `New user ${name} with invite code ${inviteMeta} at ${url}`,
     "celebrate"
   );
 
-  return address;
+  return { address, faucetTransfer };
 }

@@ -1,7 +1,11 @@
-import { useMemo } from "react";
+import { assertNotNull } from "@daimo/common";
+import Octicons from "@expo/vector-icons/Octicons";
+import { ReactElement, ReactNode, useContext, useMemo } from "react";
 import {
+  Image,
+  ImageSourcePropType,
+  Pressable,
   StyleSheet,
-  Text,
   TextStyle,
   TouchableHighlight,
   View,
@@ -16,13 +20,19 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { AnimatedCircle } from "./AnimatedCircle";
+import Spacer from "./Spacer";
 import { color, touchHighlightUnderlay } from "./style";
+import { DaimoText, TextBody, TextBtnCaps } from "./text";
+import FaceIdPrimaryIcon from "../../../assets/face-id-primary.png";
+import FaceIdIcon from "../../../assets/face-id.png";
+import { DispatcherContext } from "../../action/dispatch";
 
 interface TextButtonProps {
   title?: string;
   children?: React.ReactNode;
   onPress?: () => void;
   disabled?: boolean;
+  showBiometricIcon?: boolean;
 }
 
 interface ButtonProps extends TextButtonProps {
@@ -31,6 +41,7 @@ interface ButtonProps extends TextButtonProps {
 
 interface LongPressButtonProps extends ButtonProps {
   duration: number;
+  showBiometricIcon?: boolean;
 }
 
 export function LongPressBigButton(props: LongPressButtonProps) {
@@ -48,18 +59,20 @@ export function LongPressBigButton(props: LongPressButtonProps) {
     .minDuration(props.duration)
     .enabled(!props.disabled || false)
     .onBegin(() => {
-      buttonScale.value = withTiming(0.97, { duration: props.duration });
+      buttonScale.value = withTiming(0.97, { duration: props.duration }, () => {
+        if (buttonScale.value === 0.97) {
+          console.log("[BUTTON] LongPresButton pressed");
+          props.onPress && runOnJS(props.onPress)();
+        }
+      });
       animatedCircleProgress.value = withTiming(1, {
         duration: props.duration,
       });
     })
     .onFinalize((_, success) => {
-      if (success && props.onPress) {
-        runOnJS(props.onPress)();
-      } else {
-        buttonScale.value = withTiming(1);
-        animatedCircleProgress.value = withTiming(0);
-      }
+      console.log("[BUTTON] LongPressButton onFinalize");
+      buttonScale.value = withTiming(1);
+      animatedCircleProgress.value = withTiming(0);
     });
 
   const buttonStyle = useAnimatedStyle(() => {
@@ -74,11 +87,7 @@ export function LongPressBigButton(props: LongPressButtonProps) {
         style={[
           props.disabled ? disabledStyle : style.button,
           buttonStyle,
-          {
-            justifyContent: "center",
-            alignItems: "center",
-            flexDirection: "row",
-          },
+          styles.centerContent,
         ]}
         {...(touchUnderlay || touchHighlightUnderlay.subtle)}
       >
@@ -96,7 +105,12 @@ export function LongPressBigButton(props: LongPressButtonProps) {
             size={12}
           />
         </View>
-        <Text style={style.title}>{props.title?.toUpperCase()}</Text>
+        <DaimoText style={style.title}>{props.title?.toUpperCase()}</DaimoText>
+        {props.showBiometricIcon && (
+          <View style={styles.biometricIconContainer}>
+            <Image source={FaceIdIcon} style={styles.biometricIcon} />
+          </View>
+        )}
       </Animated.View>
     </GestureDetector>
   );
@@ -108,6 +122,7 @@ export function ButtonBig(props: ButtonProps) {
       {...props}
       style={useStyle(buttonStyles.big, props)}
       touchUnderlay={useTouchUnderlay(props.type)}
+      icon={props.type === "subtle" ? FaceIdPrimaryIcon : FaceIdIcon}
     />
   );
 }
@@ -118,12 +133,82 @@ export function ButtonMed(props: ButtonProps) {
       {...props}
       style={useStyle(buttonStyles.med, props)}
       touchUnderlay={useTouchUnderlay(props.type)}
+      icon={props.type === "subtle" ? FaceIdPrimaryIcon : FaceIdIcon}
     />
   );
 }
 
 export function TextButton(props: TextButtonProps) {
-  return <Button {...props} style={useStyle(buttonStyles.small, props)} />;
+  return (
+    <Button
+      {...props}
+      style={useStyle(buttonStyles.small, props)}
+      icon={FaceIdPrimaryIcon}
+    />
+  );
+}
+
+// Shows the (?) icon. Should open the help modal.
+export function HelpButton({
+  onPress,
+  helpTitle,
+  helpContent,
+  title,
+}: {
+  onPress?: () => void;
+  helpTitle?: string;
+  helpContent?: ReactElement;
+  title?: string;
+}) {
+  const dispatcher = useContext(DispatcherContext);
+
+  if (onPress == null) {
+    onPress = () => {
+      dispatcher.dispatch({
+        name: "helpModal",
+        title: assertNotNull(helpTitle, "Must provide helpTitle"),
+        content: assertNotNull(helpContent, "Must provide helpContent"),
+      });
+    };
+  }
+
+  return (
+    <Pressable onPress={onPress} hitSlop={16} style={{ paddingHorizontal: 4 }}>
+      <TextBody color={color.primary}>
+        <Octicons size={16} name="info" color={color.primary} />
+        {title && <Spacer w={4} />}
+        {title}
+      </TextBody>
+    </Pressable>
+  );
+}
+
+export function BadgeButton({
+  title,
+  children,
+  onPress,
+}: {
+  title?: string;
+  children?: ReactNode;
+  onPress?: () => void;
+}) {
+  return (
+    <View style={{ paddingVertical: 8 }}>
+      <TouchableHighlight
+        onPress={onPress}
+        style={{
+          backgroundColor: color.ivoryDark,
+          paddingHorizontal: 12,
+          paddingVertical: 6,
+          borderRadius: 8,
+        }}
+        hitSlop={12}
+        {...touchHighlightUnderlay.subtle}
+      >
+        {children || <TextBtnCaps color={color.grayDark}>{title}</TextBtnCaps>}
+      </TouchableHighlight>
+    </View>
+  );
 }
 
 function useStyle(base: ButtonStyle, props: TextButtonProps) {
@@ -190,6 +275,7 @@ function Button(
   props: TextButtonProps & {
     style: ButtonStyle;
     touchUnderlay?: ReturnType<typeof useTouchUnderlay>;
+    icon?: ImageSourcePropType;
   }
 ) {
   const disabledStyle = useMemo(
@@ -198,7 +284,7 @@ function Button(
   );
 
   const child = props.title ? (
-    <Text style={props.style.title}>{props.title.toUpperCase()}</Text>
+    <DaimoText style={props.style.title}>{props.title.toUpperCase()}</DaimoText>
   ) : (
     props.children
   );
@@ -210,8 +296,41 @@ function Button(
       disabled={props.disabled}
       {...(props.touchUnderlay || touchHighlightUnderlay.subtle)}
     >
-      {child}
+      <View style={styles.centerContent}>
+        {child}
+        {props.showBiometricIcon && props.icon && (
+          <View style={styles.biometricIconContainer}>
+            <Image source={props.icon} style={styles.biometricIcon} />
+          </View>
+        )}
+      </View>
     </TouchableHighlight>
+  );
+}
+
+export function DescriptiveClickableRow({
+  icon,
+  title,
+  message,
+  onPressHelp,
+}: {
+  icon: ReactNode;
+  title: string;
+  message: string;
+  onPressHelp?(): void;
+}) {
+  return (
+    <View style={styles.buttonInfoContainer}>
+      {icon}
+      <View style={styles.messageContainer}>
+        <View style={styles.textRow}>
+          <TextBody color={color.midnight}>{title}</TextBody>
+          <Spacer w={8} />
+          {onPressHelp && <HelpButton onPress={onPressHelp} />}
+        </View>
+        <DaimoText style={styles.infoMessageText}>{message}</DaimoText>
+      </View>
+    </View>
   );
 }
 
@@ -222,6 +341,7 @@ const buttonStyles = {
       paddingVertical: 20,
       borderRadius: 8,
       backgroundColor: color.primaryBgLight,
+      height: 60,
     },
     title: {
       fontSize: 14,
@@ -233,7 +353,7 @@ const buttonStyles = {
   med: StyleSheet.create({
     button: {
       paddingHorizontal: 16,
-      paddingVertical: 12,
+      paddingVertical: 16,
       borderRadius: 6,
       backgroundColor: color.primaryBgLight,
     },
@@ -246,9 +366,12 @@ const buttonStyles = {
   }),
   small: StyleSheet.create({
     button: {
+      justifyContent: "center",
+      alignItems: "center",
       paddingHorizontal: 16,
       paddingVertical: 8,
-      borderRadius: 8,
+      borderRadius: 4,
+      height: 40,
     },
     title: {
       fontSize: 14,
@@ -258,3 +381,35 @@ const buttonStyles = {
     },
   }),
 };
+
+const styles = StyleSheet.create({
+  biometricIconContainer: {
+    marginLeft: 8,
+  },
+  biometricIcon: {
+    height: 24,
+    width: 24,
+  },
+  centerContent: {
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+  },
+  messageContainer: {
+    marginLeft: 16,
+    flex: 1,
+  },
+  infoMessageText: {
+    fontSize: 16,
+    lineHeight: 20,
+    color: color.gray3,
+    fontWeight: "500",
+  },
+  buttonInfoContainer: {
+    flexDirection: "row",
+    marginBottom: 20,
+  },
+  textRow: {
+    flexDirection: "row",
+  },
+});

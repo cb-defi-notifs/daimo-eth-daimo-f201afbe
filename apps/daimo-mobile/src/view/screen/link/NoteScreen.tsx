@@ -1,13 +1,15 @@
 import {
   AddrLabel,
-  DaimoLinkNote,
+  DaimoNoteState,
   DaimoNoteStatus,
   EAccount,
   OpStatus,
+  PendingOp,
   dollarsToAmount,
   getAccountName,
+  now,
 } from "@daimo/common";
-import { daimoChainFromId, daimoEphemeralNotesAddress } from "@daimo/contract";
+import { daimoChainFromId } from "@daimo/contract";
 import {
   DaimoNonce,
   DaimoNonceMetadata,
@@ -18,18 +20,23 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { ReactNode, useEffect, useMemo } from "react";
 import { ActivityIndicator, ScrollView, View } from "react-native";
 
+import { SetActStatus } from "../../../action/actStatus";
 import {
   transferAccountTransform,
-  useSendAsync,
+  useSendWithDeviceKeyAsync,
 } from "../../../action/useSendAsync";
+import { ParamListHome, useExitBack } from "../../../common/nav";
+import { i18NLocale, i18n } from "../../../i18n";
 import { useFetchLinkStatus } from "../../../logic/linkStatus";
 import { useEphemeralSignature } from "../../../logic/note";
-import { Account } from "../../../model/account";
+import { getRpcFunc } from "../../../logic/trpc";
+import { Account } from "../../../storage/account";
 import { TitleAmount, getAmountText } from "../../shared/Amount";
 import { ButtonBig } from "../../shared/Button";
-import { ScreenHeader, useExitToHome } from "../../shared/ScreenHeader";
+import { CenterSpinner } from "../../shared/CenterSpinner";
+import { ScreenHeader } from "../../shared/ScreenHeader";
 import Spacer from "../../shared/Spacer";
-import { ParamListReceive, useDisableTabSwipe, useNav } from "../../shared/nav";
+import { ErrorBanner } from "../../shared/error";
 import { ss } from "../../shared/style";
 import {
   TextBody,
@@ -40,7 +47,8 @@ import {
 } from "../../shared/text";
 import { useWithAccount } from "../../shared/withAccount";
 
-type Props = NativeStackScreenProps<ParamListReceive, "Note">;
+type Props = NativeStackScreenProps<ParamListHome, "Note">;
+const i18 = i18n.note;
 
 export default function NoteScreen(props: Props) {
   const Inner = useWithAccount(NoteScreenInner);
@@ -48,61 +56,54 @@ export default function NoteScreen(props: Props) {
 }
 
 function NoteScreenInner({ route, account }: Props & { account: Account }) {
-  const nav = useNav();
-  useDisableTabSwipe(nav);
-
   const { link } = route.params;
-  const { ephemeralPrivateKey, ephemeralOwner } = link as DaimoLinkNote;
-  console.log(`[NOTE] rendering note ${ephemeralOwner}`);
+  console.log(`[NOTE] rendering NoteScreen, link ${JSON.stringify(link)}`);
 
-  const noteFetch = useFetchLinkStatus(
-    link,
-    daimoChainFromId(account.homeChainId)
-  )!;
-
+  // Connect to the relevant DaimoEphemeralNotes[V2] contract info
+  const chain = daimoChainFromId(account.homeChainId);
+  const noteFetch = useFetchLinkStatus(link, chain)!;
   const noteStatus = noteFetch.data as DaimoNoteStatus | undefined;
 
   const title = (function (): string {
     switch (noteStatus?.status) {
-      case "claimed":
-        return "Claimed Link";
-      case "cancelled":
-        return "Cancelled Link";
+      case DaimoNoteState.Claimed:
+        return i18.accepted.link();
+      case DaimoNoteState.Cancelled:
+        return i18.cancelled.link();
       default:
-        return "Payment Link";
+        return i18.payment();
     }
   })();
 
   return (
     <View style={ss.container.screen}>
-      <ScreenHeader title={title} onExit={useExitToHome()} />
+      <ScreenHeader title={title} onBack={useExitBack()} />
       <ScrollView bounces={false}>
-        {noteFetch.isFetching && <Spinner />}
-        {noteFetch.error && <TextError>{noteFetch.error.message}</TextError>}
+        {noteFetch.isFetching && <CenterSpinner />}
+        {noteFetch.error && (
+          <ErrorBanner
+            error={noteFetch.error}
+            displayTitle={i18.invalid()}
+            displayMessage={noteFetch.error.message}
+          />
+        )}
         {noteStatus && (
-          <NoteDisplay {...{ account, ephemeralPrivateKey, noteStatus }} />
+          <NoteDisplayInner
+            {...{ account, noteStatus: { ...noteStatus, link } }}
+          />
         )}
       </ScrollView>
     </View>
   );
 }
 
-function Spinner() {
-  return (
-    <View style={ss.container.center}>
-      <ActivityIndicator size="large" />
-    </View>
-  );
-}
-
 interface NoteDisplayProps {
   noteStatus: DaimoNoteStatus;
-  ephemeralPrivateKey?: `0x${string}`;
 }
 
 /// Displays a note: amount, status, and button to claim.
 export function NoteDisplay(
-  props: NoteDisplayProps & { hideAmount?: boolean }
+  props: NoteDisplayProps & { hideAmount?: boolean; leaveScreen?: () => void }
 ) {
   const Inner = useWithAccount(NoteDisplayInner);
   return <Inner {...props} />;
@@ -111,95 +112,155 @@ export function NoteDisplay(
 function NoteDisplayInner({
   account,
   noteStatus,
-  ephemeralPrivateKey,
   hideAmount,
-}: NoteDisplayProps & { account: Account; hideAmount?: boolean }) {
+  leaveScreen,
+}: NoteDisplayProps & {
+  account: Account;
+  hideAmount?: boolean;
+  leaveScreen?: () => void;
+}) {
   // Where the note came from
   const sendPhrase =
     noteStatus.sender.addr === account.address
-      ? "You sent"
-      : getAccountName(noteStatus.sender) + " sent";
+      ? i18.send.self()
+      : i18.send.other(getAccountName(noteStatus.sender, i18NLocale));
 
-  // The note itself
-  const { ephemeralOwner } = noteStatus.link;
-
-  // Signature to claim the note
+  // The note itself and signature
+  const ephemeralOwner = noteStatus.ephemeralOwner!;
   const ephemeralSignature = useEphemeralSignature(
     noteStatus.sender.addr,
     account.address,
-    ephemeralPrivateKey
+    noteStatus.link.type === "note"
+      ? noteStatus.link.ephemeralPrivateKey
+      : undefined,
+    noteStatus.link.type === "notev2" ? noteStatus.link.seed : undefined
   );
 
   const nonceMetadata = new DaimoNonceMetadata(DaimoNonceType.ClaimNote);
-  const nonce = useMemo(
-    () => new DaimoNonce(nonceMetadata),
-    [ephemeralOwner, ephemeralPrivateKey]
-  );
+  const nonce = useMemo(() => new DaimoNonce(nonceMetadata), [ephemeralOwner]);
+
+  const isV2RecipientClaim =
+    noteStatus.link.type === "notev2" &&
+    noteStatus.sender.addr !== account.address;
+  const rpcFunc = getRpcFunc(daimoChainFromId(account.homeChainId));
+  const customHandler = isV2RecipientClaim
+    ? async (setAS: SetActStatus) => {
+        setAS("loading", i18.accept.loading());
+        const txHash = await rpcFunc.claimEphemeralNoteSponsored.mutate({
+          ephemeralOwner,
+          recipient: account.address,
+          signature: ephemeralSignature,
+        });
+        setAS("success", i18.accept.link());
+        return { txHash } as PendingOp;
+      }
+    : undefined;
 
   const sendFn = async (opSender: DaimoOpSender) => {
-    console.log(`[ACTION] claiming note ${ephemeralOwner}`);
-    return opSender.claimEphemeralNote(ephemeralOwner, ephemeralSignature, {
+    const opMetadata = {
       nonce,
       chainGasConstants: account.chainGasConstants,
-    });
+    };
+    if (noteStatus.contractAddress === opSender.opConfig.notesAddressV1) {
+      console.log(`[ACTION] claiming note ${ephemeralOwner}`);
+      return opSender.claimEphemeralNoteV1(
+        ephemeralOwner,
+        ephemeralSignature,
+        opMetadata
+      );
+    } else {
+      if (noteStatus.sender.addr === account.address) {
+        console.log(`[ACTION] claiming notev2 self ${ephemeralOwner}`);
+        return opSender.claimEphemeralNoteSelf(ephemeralOwner, opMetadata);
+      } else {
+        console.log(`[ACTION] claiming notev2 recipient ${ephemeralOwner}`);
+        return opSender.claimEphemeralNoteRecipient(
+          ephemeralOwner,
+          ephemeralSignature,
+          opMetadata
+        );
+      }
+    }
   };
 
-  // Add pending transaction immediately
-  const { status, message, cost, exec } = useSendAsync({
+  const isOwnSentNote = noteStatus.sender.addr === account.address;
+
+  const { status, message, cost, exec } = useSendWithDeviceKeyAsync({
     dollarsToSend: 0,
     sendFn,
+    customHandler,
     pendingOp: {
-      type: "transfer",
+      type: "claimLink",
       status: OpStatus.pending,
-      from: daimoEphemeralNotesAddress,
+      from: noteStatus.contractAddress,
       to: account.address,
       amount: Number(dollarsToAmount(noteStatus.dollars)),
-      timestamp: Date.now() / 1e3,
+      timestamp: now(),
       nonceMetadata: nonceMetadata.toHex(),
+      noteStatus: {
+        ...noteStatus,
+        status: isOwnSentNote
+          ? DaimoNoteState.Cancelled
+          : DaimoNoteState.Claimed,
+        claimer: { addr: account.address, name: account.name },
+      },
     },
     accountTransform: transferAccountTransform([
       {
-        addr: daimoEphemeralNotesAddress,
+        addr: noteStatus.contractAddress,
         label: AddrLabel.PaymentLink,
       } as EAccount,
+      noteStatus.sender,
     ]),
   });
-  console.log(`[NOTE] rendering NoteDisplay, status ${status} ${message}`);
+  console.log(
+    `[NOTE] rendering NoteDisplay, status ${status} ${message} ${JSON.stringify(
+      noteStatus
+    )} ${ephemeralSignature}`
+  );
 
   const netRecv = Math.max(0, Number(noteStatus.dollars) - cost.totalDollars);
   const netDollarsReceivedStr = getAmountText({ dollars: netRecv });
-  const isOwnSentNote = noteStatus.sender.addr === account.address;
 
   // On success, go home, show newly created transaction
-  const nav = useNav();
+  const goBack = useExitBack();
   useEffect(() => {
     if (status !== "success") return;
-    nav.navigate("HomeTab", { screen: "Home" });
+    if (leaveScreen) leaveScreen();
+    else goBack!();
   }, [status]);
 
   const statusMessage = (function (): ReactNode {
     switch (noteStatus.status) {
-      case "claimed":
+      case DaimoNoteState.Claimed:
         return (
-          <TextBold>Claimed by {getAccountName(noteStatus.claimer!)}</TextBold>
+          <TextBold>
+            {i18.accepted.long(getAccountName(noteStatus.claimer!, i18NLocale))}
+          </TextBold>
         );
-      case "cancelled":
+      case DaimoNoteState.Cancelled:
         if (isOwnSentNote) {
-          return <TextBody>You reclaimed this payment link</TextBody>;
+          return <TextBody>{i18.cancelled.longSelf()}</TextBody>;
         } else {
-          return <TextError>Cancelled by sender</TextError>;
+          return <TextError>{i18.cancelled.longOther()}</TextError>;
         }
+      case DaimoNoteState.Pending: // Note is not yet onchain.
+        return <TextBody>{i18.pending.long()}</TextBody>;
+      case DaimoNoteState.Confirmed: // Note is onchain, claimable, see below.
+        break;
       default:
-      // Pending note, available to claim
+        throw new Error(`Unknown note status: ${noteStatus.status}`);
     }
+
+    // Note is onchain, ready to claim.
     switch (status) {
       case "idle":
         if (netRecv === 0) {
-          return `Gas too high to claim`;
+          return i18.gasTooHigh();
         } else if (isOwnSentNote) {
-          return `Cancel this link, reclaiming ${netDollarsReceivedStr}`;
+          return i18.cancel.long(netDollarsReceivedStr);
         } else {
-          return `Claim this link, receiving ${netDollarsReceivedStr}`;
+          return i18.accept.long(netDollarsReceivedStr);
         }
       case "loading":
         return message;
@@ -214,7 +275,8 @@ function NoteDisplayInner({
     // Pending notes are not yet claimable.
     // Claimed and cancelled notes are no longer claimable.
     // Only "confirmed" notes are claimable.
-    const isClaimable = noteStatus.status === "confirmed";
+    const isClaimable = noteStatus.status === DaimoNoteState.Confirmed;
+    const i18nButton = i18n.shared;
 
     switch (status) {
       case "idle":
@@ -222,16 +284,17 @@ function NoteDisplayInner({
           return (
             <ButtonBig
               type="primary"
-              title="Reclaim"
+              title={i18nButton.buttonAction.cancel()}
               onPress={exec}
               disabled={!isClaimable || netRecv === 0}
+              showBiometricIcon
             />
           );
         } else {
           return (
             <ButtonBig
               type="primary"
-              title="Accept"
+              title={i18nButton.buttonAction.accept()}
               onPress={exec}
               disabled={!isClaimable || netRecv === 0}
             />
@@ -240,9 +303,17 @@ function NoteDisplayInner({
       case "loading":
         return <ActivityIndicator size="large" />;
       case "success":
-        return <ButtonBig type="success" title="Success" disabled />;
+        return (
+          <ButtonBig
+            type="success"
+            title={i18nButton.buttonStatus.success()}
+            disabled
+          />
+        );
       case "error":
-        return <ButtonBig type="danger" title="Error" disabled />;
+        return (
+          <ButtonBig type="danger" title={i18nButton.buttonStatus.error()} />
+        );
     }
   })();
 
@@ -256,6 +327,14 @@ function NoteDisplayInner({
           </TextCenter>
           <Spacer h={8} />
           <TitleAmount amount={dollarsToAmount(noteStatus.dollars)} />
+          {noteStatus.memo && (
+            <>
+              <Spacer h={8} />
+              <TextCenter>
+                <TextLight>{noteStatus.memo}</TextLight>
+              </TextCenter>
+            </>
+          )}
           <Spacer h={32} />
         </>
       )}

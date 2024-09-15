@@ -1,0 +1,193 @@
+name: CD
+
+on:
+  push:
+    branches:
+      - master
+      - prod
+    tags:
+      - "v*.*.*"
+
+jobs:
+  api-deploy:
+    name: API Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          mask-aws-account-id: true
+
+      - id: login-ecr
+        name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set branch-level configuration
+        run: |
+          if [[ ${{ github.ref }} == "refs/heads/prod" ]]; then
+            echo "IMAGE_TAG=prod" >> $GITHUB_ENV
+            echo "CLUSTER_NAME=${{ vars.AWS_ECS_API_CLUSTER_PROD }}" >> $GITHUB_ENV
+            echo "SERVICE_NAME=${{ vars.AWS_ECS_API_SERVICE_PROD }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+            echo "CLUSTER_NAME=${{ vars.AWS_ECS_API_CLUSTER_STAGING }}" >> $GITHUB_ENV
+            echo "SERVICE_NAME=${{ vars.AWS_ECS_API_SERVICE_STAGING }}" >> $GITHUB_ENV
+          fi
+
+      - name: Check for existing image with GIT_SHA
+        env:
+          GIT_SHA: ${{ github.sha }}
+          REPO: ${{ vars.AWS_ECR_API_REPO }}
+        run: |
+          image_manifest=$(aws ecr batch-get-image --repository-name $REPO --image-ids imageTag=$GIT_SHA --query 'images[0].imageManifest')
+          echo "IMAGE_MANIFEST=$image_manifest" >> $GITHUB_ENV
+
+      - if: env.IMAGE_MANIFEST == 'null'
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - if: env.IMAGE_MANIFEST == 'null'
+        name: Build, tag, and push docker image to Amazon ECR
+        uses: docker/build-push-action@v5
+        with:
+          cache-from: type=gha
+          cache-to: type=gha
+          context: .
+          file: ./packages/daimo-api/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ vars.AWS_ECR_API_REPO }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ vars.AWS_ECR_API_REPO }}:${{ env.IMAGE_TAG }}
+
+      - if: env.IMAGE_MANIFEST != 'null'
+        name: Add tag to existing image.
+        env:
+          REPO: ${{ vars.AWS_ECR_API_REPO }}
+        run: |
+          echo "Image exists with GIT_SHA tag, adding tag \"$IMAGE_TAG\" to it."
+          IMAGE_MANIFEST=$(echo $IMAGE_MANIFEST | jq -c -r)
+
+          set +e
+          output=$(aws ecr put-image --repository-name $REPO --image-tag $IMAGE_TAG --image-manifest "$IMAGE_MANIFEST" 2>&1)
+          status=$?
+          set -e
+
+          if [[ $status -ne 0 ]]; then
+            if [[ ! "$output" =~ "ImageAlreadyExistsException" ]]; then
+              echo $output
+              exit $status
+            else
+              echo "Image already tagged with \"$IMAGE_TAG.\""
+            fi
+          fi
+
+      - name: Deploy to ECS
+        run: aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --force-new-deployment > /dev/null
+
+  clippy-deploy:
+    if: github.ref == 'refs/heads/master'
+    name: Clippy Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          mask-aws-account-id: true
+
+      - id: login-ecr
+        name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build, tag, and push docker image to Amazon ECR
+        uses: docker/build-push-action@v5
+        with:
+          cache-from: type=gha
+          cache-to: type=gha
+          context: .
+          file: ./apps/daimo-clippy/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ vars.AWS_ECR_CLIPPY_REPO }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ vars.AWS_ECR_CLIPPY_REPO }}:latest
+
+      - name: Update ECS Clippy Service
+        run: aws ecs update-service --cluster ${{ vars.AWS_ECS_INTERNAL_CLUSTER_PROD }} --service ${{ vars.AWS_ECS_INTERNAL_SERVICE_PROD }} --force-new-deployment
+
+  eas-deploy:
+    if: github.ref == 'refs/heads/master'
+    name: EAS Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: "20.x"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Expo and EAS
+        uses: expo/expo-github-action@v8
+        with:
+          packager: npm
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build and publish update
+        run: npm run build:prod
+        working-directory: ./apps/daimo-mobile
+
+  # Only publish APK on tag (e.g. v1.0.0)
+  publish-apk:
+    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publish APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: "20.x"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Expo and EAS
+        uses: expo/expo-github-action@v8
+        with:
+          packager: npm
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build APK with EAS
+        run: eas build --platform android --profile preview --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Download APK from EAS
+        run: |
+          eas artifact:download --platform android
+        working-directory: ./apps/daimo-mobile
+
+      - name: Publish APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/daimo-mobile/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

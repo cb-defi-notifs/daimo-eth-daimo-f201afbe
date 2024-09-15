@@ -1,20 +1,32 @@
+// SOON TO BE DEPRECATED FOR SHORTER LINKS /l/
 import {
   DaimoAccountStatus,
+  DaimoInviteCodeStatus,
   DaimoLinkStatus,
   DaimoNoteStatus,
+  DaimoRequestState,
   DaimoRequestStatus,
+  DaimoRequestV2Status,
   assert,
-  daimoDomain,
-  daimoLinkBase,
+  daimoLinkBaseV2,
   getAccountName,
   parseDaimoLink,
 } from "@daimo/common";
 import { Metadata } from "next";
 import Image from "next/image";
 
-import { CallToAction } from "./CallToAction";
+import { CallToAction } from "../../../components/CallToAction";
 import { Providers, chainsDaimoL2 } from "../../../components/Providers";
+import { getI18N } from "../../../i18n";
+import { getReqLang } from "../../../i18n/server";
+import { getAbsoluteUrl } from "../../../utils/getAbsoluteUrl";
 import { rpc } from "../../../utils/rpc";
+
+//
+// DEPRECATED
+// This page exists solely for backcompat for old /link/ deeplinks.
+// No need to translate to other languages.
+//
 
 // Opt out of caching for all data requests in the route segment
 export const dynamic = "force-dynamic";
@@ -29,19 +41,37 @@ type TitleDesc = {
   action?: string;
   dollars?: `${number}`;
   description: string;
-  walletActionLinkStatus?: DaimoLinkStatus;
+  linkStatus?: DaimoLinkStatus;
 };
 
-const defaultMeta = metadata("Daimo", "Payments on Ethereum");
+// how to load i18n
+const defaultMeta = metadata(
+  "Daimo",
+  "Payments on Ethereum",
+  getAbsoluteUrl(`/logo-link-preview.png`)
+);
 
 function getUrl(props: LinkProps): string {
   const path = (props.params.slug || []).join("/");
-  return `${daimoLinkBase}/${path}`;
+  return `${daimoLinkBaseV2}/${path}`;
 }
 
-function getDirectDeeplink(props: LinkProps): string {
-  const path = (props.params.slug || []).join("/");
-  return `daimo://${path}`;
+// Generates a OpenGraph link preview image URL
+// The image itself is also generated dynamically -- see preview/route.tsx
+function getPreviewURL(
+  name: string | undefined,
+  action: string | undefined,
+  dollars: `${number}` | undefined
+) {
+  if (!name) return getAbsoluteUrl(`/logo-link-preview.png`);
+
+  const uriEncodedAction = action ? encodeURIComponent(action) : undefined;
+  let previewURL = getAbsoluteUrl(`/preview?name=${name}`);
+  if (uriEncodedAction)
+    previewURL = previewURL.concat(`&action=${uriEncodedAction}`);
+  if (dollars) previewURL = previewURL.concat(`&dollars=${dollars}`);
+  previewURL = previewURL.concat(`&v=3`); // cache bust images without profile pics
+  return previewURL;
 }
 
 export async function generateMetadata(props: LinkProps): Promise<Metadata> {
@@ -50,7 +80,8 @@ export async function generateMetadata(props: LinkProps): Promise<Metadata> {
   const { name, action, dollars } = titleDesc;
   const prefixedDollars = dollars && `$${dollars}`;
   const title = [name, action, prefixedDollars].filter((x) => x).join(" ");
-  return metadata(title, titleDesc.description);
+  const previewURL = getPreviewURL(name, action, dollars);
+  return metadata(title, titleDesc.description, previewURL);
 }
 
 export default async function LinkPage(props: LinkProps) {
@@ -62,13 +93,11 @@ export default async function LinkPage(props: LinkProps) {
 }
 
 async function LinkPageInner(props: LinkProps) {
-  const { name, action, dollars, description, walletActionLinkStatus } =
+  const { name, action, dollars, description, linkStatus } =
     (await loadTitleDesc(getUrl(props))) || {
       title: "Daimo",
       description: "Payments on Ethereum",
     };
-
-  const directDeepLink = getDirectDeeplink(props);
 
   return (
     <main className="max-w-md mx-auto px-4">
@@ -78,7 +107,7 @@ async function LinkPageInner(props: LinkProps) {
 
         <div className="h-12" />
 
-        <div className="text-xl font-semibold">
+        <div className="flex text-xl font-semibold justify-center items-center">
           {name && <span>{name}</span>}
           {action && <span className="text-grayMid">{" " + action}</span>}
         </div>
@@ -89,15 +118,17 @@ async function LinkPageInner(props: LinkProps) {
           </>
         )}
         <div className="h-9" />
-        <CallToAction
-          {...{ description, walletActionLinkStatus, directDeepLink }}
-        />
+        <CallToAction {...{ description, linkStatus }} />
       </center>
     </main>
   );
 }
 
-function metadata(title: string, description: string): Metadata {
+function metadata(
+  title: string,
+  description: string,
+  previewURL: string
+): Metadata {
   return {
     title,
     description,
@@ -110,8 +141,10 @@ function metadata(title: string, description: string): Metadata {
       siteName: title,
       images: [
         {
-          url: `https://${daimoDomain}/logo-link-preview.png`,
+          url: previewURL,
           alt: "Daimo",
+          width: 1200,
+          height: 630,
         },
       ],
       type: "website",
@@ -120,6 +153,8 @@ function metadata(title: string, description: string): Metadata {
 }
 
 async function loadTitleDesc(url: string): Promise<TitleDesc | null> {
+  const i18n = getI18N(getReqLang());
+
   let res: DaimoLinkStatus;
   try {
     res = await rpc.getLinkStatus.query({ url });
@@ -129,27 +164,45 @@ async function loadTitleDesc(url: string): Promise<TitleDesc | null> {
     if (link == null) {
       return {
         name: "Daimo",
-        description: "Unrecognized link",
+        description: i18n.link.errors.unrecognizedLink(),
       };
     } else if (link.type === "account") {
       return {
         name: `${link.account}`,
-        description: "Couldn't load account",
+        description: i18n.link.errors.loadAccount(),
       };
     } else if (link.type === "request") {
+      const result: TitleDesc = {
+        name: `${link.recipient}`,
+        action: i18n.link.actions.requestingPayment(),
+        description: i18n.link.errors.loadStatus(),
+      };
+      if (link.dollars) {
+        result.action = i18n.link.actions.requesting();
+        result.dollars = `${link.dollars}`;
+      }
+      return result;
+    } else if (link.type === "requestv2") {
       return {
         name: `${link.recipient}`,
-        action: `is requesting`,
+        action: i18n.link.actions.requesting(),
         dollars: `${Number(link.dollars).toFixed(2)}` as `${number}`,
-        description: "Couldn't load request status",
+        description: i18n.link.errors.loadStatus(),
+      };
+    } else if (link.type === "notev2") {
+      return {
+        name: `${link.sender}`,
+        action: i18n.link.actions.sentYou(),
+        dollars: `${Number(link.dollars).toFixed(2)}` as `${number}`,
+        description: i18n.link.errors.loadStatus(),
       };
     } else {
       assert(link.type === "note");
       return {
         name: `${link.previewSender}`,
-        action: `sent you`,
+        action: i18n.link.actions.sentYou(),
         dollars: `${Number(link.previewDollars).toFixed(2)}` as `${number}`,
-        description: "Couldn't load payment link",
+        description: i18n.link.errors.loadStatus(),
       };
     }
   }
@@ -157,65 +210,148 @@ async function loadTitleDesc(url: string): Promise<TitleDesc | null> {
   switch (res.link.type) {
     case "account": {
       const { account } = res as DaimoAccountStatus;
+      console.log(`[LINK] got account ${JSON.stringify(account)}`);
       return {
         name: getAccountName(account),
-        description: "Get Daimo to send or receive payments",
+        description: i18n.link.responses.account.desc(),
       };
     }
     case "request": {
       const { recipient, fulfilledBy } = res as DaimoRequestStatus;
       const name = getAccountName(recipient);
       if (fulfilledBy === undefined) {
-        return {
+        const result: TitleDesc = {
           name: `${name}`,
-          action: `is requesting`,
-          dollars: `${res.link.dollars}`,
-          description: "Pay with Daimo",
-          walletActionLinkStatus: res,
+          action: i18n.link.actions.requestingPayment(),
+          description: i18n.link.responses.request.desc1(),
+          linkStatus: res,
         };
+        if (res.link.dollars) {
+          result.action = i18n.link.actions.requesting();
+          result.dollars = `${res.link.dollars}`;
+        }
+        return result;
       } else {
-        return {
+        const result: TitleDesc = {
           name: `${name}`,
-          action: `requested`,
-          dollars: `${res.link.dollars}`,
-          description: `Paid by ${getAccountName(fulfilledBy)}`,
+          action: i18n.link.actions.requestedPayment(),
+          description: i18n.link.responses.request.desc2(
+            getAccountName(fulfilledBy)
+          ),
         };
+        if (res.link.dollars) {
+          result.action = i18n.link.actions.requested();
+          result.dollars = `${res.link.dollars}`;
+        }
+        return result;
       }
     }
-    case "note": {
+    case "requestv2": {
+      const { recipient, fulfilledBy, status } = res as DaimoRequestV2Status;
+      const name = getAccountName(recipient);
+
+      switch (status) {
+        case DaimoRequestState.Pending:
+        case DaimoRequestState.Created: {
+          return {
+            name: `${name}`,
+            action: i18n.link.actions.requestingPayment(),
+            dollars: `${res.link.dollars}`,
+            description: i18n.link.responses.requestsv2.created(),
+            linkStatus: res,
+          };
+        }
+        case DaimoRequestState.Cancelled: {
+          return {
+            name: `${name}`,
+            action: i18n.link.actions.cancelledRequest(),
+            dollars: `${res.link.dollars}`,
+            description: i18n.link.responses.requestsv2.canceled(
+              getAccountName(recipient)
+            ),
+          };
+        }
+        case DaimoRequestState.Fulfilled: {
+          return {
+            name: `${name}`,
+            action: i18n.link.actions.requested(),
+            dollars: `${res.link.dollars}`,
+            description: i18n.link.responses.requestsv2.fulfilled(
+              getAccountName(fulfilledBy!)
+            ),
+          };
+        }
+        default: {
+          throw new Error(`unexpected DaimoRequestState ${status}`);
+        }
+      }
+    }
+    case "note":
+    case "notev2": {
       const { status, dollars, sender, claimer } = res as DaimoNoteStatus;
       switch (status) {
         case "pending":
         case "confirmed": {
           return {
             name: `${getAccountName(sender)}`,
-            action: `sent you`,
+            action: i18n.link.actions.sentYou(),
             dollars: `${dollars}`,
-            description: "Claim with Daimo",
-            walletActionLinkStatus: res,
+            description: i18n.link.responses.notev2.confirmed(),
+            linkStatus: res,
           };
         }
         case "claimed": {
-          const claim = claimer ? getAccountName(claimer) : "(missing claimer)";
+          const claim = claimer
+            ? getAccountName(claimer)
+            : "(missing receiver)";
           return {
             name: `${getAccountName(sender)}`,
-            action: `sent`,
+            action: i18n.link.actions.sent(),
             dollars: `${dollars}`,
-            description: `Claimed by ${claim}`,
+            description: i18n.link.responses.notev2.claimed.desc(claim),
           };
         }
         case "cancelled": {
           return {
             name: `${getAccountName(sender)}`,
-            action: `cancelled send`,
+            action: i18n.link.actions.cancelledSend(),
             dollars: `${dollars}`,
-            description: `Reclaimed by ${getAccountName(sender)}`,
+            description: i18n.link.responses.notev2.cancelled(
+              getAccountName(sender)
+            ),
           };
         }
         default: {
           throw new Error(`unexpected DaimoNoteStatus ${status}`);
         }
       }
+    }
+    case "invite": {
+      const { inviter, bonusDollarsInvitee, bonusDollarsInviter, isValid } =
+        res as DaimoInviteCodeStatus;
+
+      const description = (() => {
+        if (!isValid) return i18n.link.responses.invite.expired();
+        if (
+          bonusDollarsInvitee &&
+          bonusDollarsInviter &&
+          bonusDollarsInvitee === bonusDollarsInviter
+        ) {
+          return i18n.link.responses.invite.acceptTheInviteBoth(
+            bonusDollarsInvitee
+          );
+        } else if (bonusDollarsInvitee) {
+          return i18n.link.responses.invite.acceptTheInvite(
+            bonusDollarsInvitee
+          );
+        } else return i18n.link.responses.invite.getDaimo();
+      })();
+      return {
+        name: `${inviter ? getAccountName(inviter) : "daimo"}`,
+        action: i18n.link.actions.invitedYou(),
+        description,
+        linkStatus: res,
+      };
     }
     default: {
       return null;

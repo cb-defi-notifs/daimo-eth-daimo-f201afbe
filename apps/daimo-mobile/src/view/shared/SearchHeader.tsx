@@ -1,4 +1,3 @@
-import { EAccount } from "@daimo/common";
 import Octicons from "@expo/vector-icons/Octicons";
 import { RefObject, useCallback, useEffect } from "react";
 import { Keyboard, StyleSheet, TextInput, View } from "react-native";
@@ -9,12 +8,14 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-import { AccountBubble } from "./AccountBubble";
 import { AnimatedSearchInput } from "./AnimatedSearchInput";
 import { ButtonCircle } from "./ButtonCircle";
-import { useNav } from "./nav";
+import { Icon } from "./Icon";
 import { color } from "./style";
-import { useAccount } from "../../model/account";
+import { useNav } from "../../common/nav";
+import { i18n } from "../../i18n";
+import { useAccount } from "../../logic/accountManager";
+import { useInAppNotifications } from "../../logic/inAppNotifications";
 
 const animationConfig = { duration: 150 };
 
@@ -38,14 +39,16 @@ export function SearchHeader({
   const qrButton = useAnimatedStyle(() => {
     return {
       position: "absolute",
-      opacity: isFocused.value ? withTiming(0) : withTiming(1),
+      opacity: isFocused.value
+        ? withTiming(0, animationConfig)
+        : withTiming(1, animationConfig),
       zIndex: isFocused.value ? 0 : 10,
       elevation: isFocused.value ? 0 : 10,
-      right: 0,
+      left: 0,
     };
   });
 
-  const accountButton = useAnimatedStyle(() => {
+  const notificationsButton = useAnimatedStyle(() => {
     return {
       position: "absolute",
       opacity: isFocused.value
@@ -53,7 +56,7 @@ export function SearchHeader({
         : withTiming(1, animationConfig),
       zIndex: isFocused.value ? 0 : 10,
       elevation: isFocused.value ? 0 : 10,
-      left: 0,
+      right: 0,
     };
   });
 
@@ -69,52 +72,70 @@ export function SearchHeader({
     };
   });
 
-  // Left side: account bubble
-  const goToAccount = useCallback(
-    () => nav.navigate("SettingsTab", { screen: "Settings" }),
-    [nav]
-  );
-
-  // Right: QR code
+  // Left: QR code
   const goToQR = useCallback(
     () =>
       nav.navigate("HomeTab", { screen: "QR", params: { option: undefined } }),
     [nav]
   );
 
-  const [account] = useAccount();
+  // Right: Notifications
+  const goToNotifications = useCallback(
+    () => nav.navigate("HomeTab", { screen: "Notifications" }),
+    []
+  );
+
+  const account = useAccount();
+  const notifInfo = useInAppNotifications();
+
   if (account == null) return null;
-  const eAcc: EAccount = { addr: account.address, name: account.name };
 
   return (
     <View style={styles.header}>
       <Animated.View key="back" style={backButton}>
-        <TouchableOpacity onPress={() => Keyboard.dismiss()} hitSlop={16}>
+        <TouchableOpacity
+          onPress={() => {
+            setPrefix(undefined);
+            Keyboard.dismiss();
+          }}
+          hitSlop={16}
+        >
           <Octicons name="arrow-left" size={30} color={color.midnight} />
         </TouchableOpacity>
       </Animated.View>
-      <Animated.View key="icon" style={accountButton}>
-        <ButtonCircle size={50} onPress={goToAccount}>
-          <AccountBubble eAcc={eAcc} size={50} transparent />
+      <Animated.View key="icon" style={qrButton}>
+        <ButtonCircle size={50} onPress={goToQR}>
+          <View style={styles.circleButton}>
+            <Icon name="qr-code-01" size={24} color={color.primary} />
+          </View>
         </ButtonCircle>
       </Animated.View>
       <AnimatedSearchInput
         icon="search"
-        placeholder="Search for user..."
-        value={prefix || ""}
+        placeholder={i18n.searchHeader.searchUser()}
+        value={prefix}
         onChange={setPrefix}
-        onFocus={() => setPrefix("")}
-        onBlur={() => setPrefix(undefined)}
+        onFocus={() => setPrefix(prefix || "")}
+        onClose={() => setPrefix(undefined)}
         innerRef={innerRef}
         style={{ zIndex: 10 }}
       />
-      <Animated.View style={[{ marginLeft: 16 }, qrButton]}>
-        <ButtonCircle size={50} onPress={goToQR}>
-          <View style={styles.qrCircle}>
-            <Octicons name="apps" size={24} color={color.midnight} />
+      <Animated.View style={[{ marginLeft: 16 }, notificationsButton]}>
+        <ButtonCircle size={50} onPress={goToNotifications}>
+          <View style={styles.circleButton}>
+            <Icon name="bell-01" size={24} color={color.primary} />
+            {notifInfo.unread && <NotificationBadge />}
           </View>
         </ButtonCircle>
       </Animated.View>
+    </View>
+  );
+}
+
+function NotificationBadge() {
+  return (
+    <View style={styles.badgeBorder}>
+      <View style={styles.badge} />
     </View>
   );
 }
@@ -126,13 +147,30 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginHorizontal: 16,
   },
-  qrCircle: {
+  circleButton: {
     width: 50,
     height: 50,
     borderRadius: 50,
     borderWidth: 1,
     borderColor: color.grayLight,
     display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  badge: {
+    backgroundColor: "red",
+    borderRadius: 4,
+    height: 6,
+    width: 6,
+  },
+  badgeBorder: {
+    backgroundColor: "white",
+    height: 10,
+    width: 10,
+    borderRadius: 5,
+    position: "absolute",
+    top: 10,
+    right: 14,
     justifyContent: "center",
     alignItems: "center",
   },

@@ -1,12 +1,13 @@
 import { amountToDollars } from "@daimo/common";
-import { getLocales } from "expo-localization";
-import { StyleSheet, Text } from "react-native";
+import { StyleSheet, Text, TextStyle } from "react-native";
 
 import Spacer from "./Spacer";
 import { color } from "./style";
+import { DaimoText } from "./text";
+import { i18NLocale } from "../../i18n";
 
 /** 1.23 or 1,23 depending on user locale */
-export const amountSeparator = getLocales()[0].decimalSeparator || ".";
+export const amountSeparator = i18NLocale.decimalSeparator || ".";
 
 /** Returns eg "$1.00" or "$1,23" or "$1.2345" */
 export function getAmountText({
@@ -42,40 +43,35 @@ export function getAmountText({
 }
 
 /** Displays eg "$1.23" or "$1,23" as H1 or H2. */
-export function TitleAmount({ amount }: { amount: bigint }) {
+export function TitleAmount({
+  amount,
+  style,
+  preSymbol,
+  postText,
+}: {
+  amount: bigint;
+  style?: TextStyle;
+  preSymbol?: string;
+  postText?: string;
+}) {
   if (!(amount >= 0)) throw new Error("Invalid amount");
 
   const symbol = "$";
   const [dollars, cents] = amountToDollars(amount).split(".");
 
   return (
-    <Text style={styles.title}>
-      <Text style={styles.titleSmall}>{symbol}</Text>
+    <DaimoText style={[styles.title, style]}>
+      <Text style={styles.titleSmall}>
+        {preSymbol}
+        {symbol}
+      </Text>
       <Spacer w={4} />
       {dollars}
       {amountSeparator}
       {cents}
-    </Text>
-  );
-}
-
-/** Display eg. "+ $1.23" (green)  or "- $10.00" (black). */
-export function SubtitleAmountChange({ amount }: { amount: bigint }) {
-  const sign = amount >= 0 ? "+ " : "- ";
-  const symbol = "$";
-  const absAmount = amount >= 0 ? amount : -amount;
-  const [dollars, cents] = amountToDollars(absAmount).split(".");
-
-  return (
-    <Text style={styles.subtitle}>
-      <Text style={styles.subtitleSmall}>
-        {sign} {symbol}
-      </Text>
-      <Spacer w={2} />
-      {dollars}
-      {amountSeparator}
-      {cents}
-    </Text>
+      <Spacer w={8} />
+      {postText}
+    </DaimoText>
   );
 }
 

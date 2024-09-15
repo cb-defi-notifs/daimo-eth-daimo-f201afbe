@@ -1,96 +1,116 @@
-import { useIsFocused } from "@react-navigation/native";
+import { CurrencyExchangeRate, currencyRateUSD } from "@daimo/common";
+import { ForeignToken } from "@daimo/contract";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Dimensions,
   NativeSyntheticEvent,
   StyleSheet,
-  Text,
   TextInput,
   TextInputEndEditingEventData,
   TouchableWithoutFeedback,
   View,
 } from "react-native";
+import SelectDropdown from "react-native-select-dropdown";
 
 import { amountSeparator, getAmountText } from "./Amount";
+import { Badge } from "./Badge";
+import { DropdownPickButton } from "./DropdownPickButton";
 import Spacer from "./Spacer";
-import { useNav } from "./nav";
 import { color, ss } from "./style";
-import { TextCenter, TextLight } from "./text";
-import { useAccount } from "../../model/account";
+import { DaimoText, MAX_FONT_SIZE_MULTIPLIER, TextLight } from "./text";
+import { i18n } from "../../i18n";
+import { useAccount } from "../../logic/accountManager";
+import { LocalMoneyEntry, MoneyEntry } from "../../logic/moneyEntry";
 
 // Input components allows entry in range $0.01 to $99,999.99
-const MAX_DOLLAR_INPUT_EXCLUSIVE = 100_000;
+const MAX_TOTAL_DIGITS = 7;
+const i18 = i18n.amountInput;
 
 export function AmountChooser({
-  dollars,
-  onSetDollars,
+  moneyEntry,
+  onSetEntry,
   showAmountAvailable,
+  toCoin,
   autoFocus,
-  lagAutoFocus,
   disabled,
   innerRef,
   onFocus,
 }: {
-  dollars: number;
-  onSetDollars: (dollars: number) => void;
+  moneyEntry: MoneyEntry;
+  onSetEntry: (entry: MoneyEntry) => void;
   showAmountAvailable: boolean;
+  toCoin?: ForeignToken;
   autoFocus: boolean;
-  lagAutoFocus: boolean;
   disabled?: boolean;
   innerRef?: React.RefObject<TextInput>;
   onFocus?: () => void;
 }) {
   // Show how much we have available
-  const [account] = useAccount();
+  const account = useAccount();
+
   if (account == null) return null;
-  const dollarStr = getAmountText({ amount: account.lastBalance });
+
+  const dollarsAvailStr = getAmountText({ amount: account.lastBalance });
+
+  const setEntry = (entry: LocalMoneyEntry) => {
+    const { localUnits, currency } = entry;
+    const cents = Math.round(localUnits * currency.rateUSD * 100);
+    onSetEntry({ ...entry, dollars: cents / 100 });
+  };
+
+  const isNonUSD = moneyEntry.currency.currency !== "USD";
 
   return (
     <View style={ss.container.padH16}>
       <AmountInput
-        dollars={dollars}
-        onChange={onSetDollars}
+        moneyEntry={moneyEntry}
+        onChange={setEntry}
         disabled={disabled}
         innerRef={innerRef}
         autoFocus={autoFocus}
-        lagAutoFocus={lagAutoFocus}
         onFocus={onFocus}
       />
-      <Spacer h={8} />
-      <TextCenter>
-        <TextLight>
-          {showAmountAvailable ? `${dollarStr} available` : " "}
-        </TextLight>
-      </TextCenter>
+      <Spacer h={4} />
+      <View style={{ flexDirection: "row", justifyContent: "center" }}>
+        {isNonUSD && (
+          <Badge color={color.midnight}>
+            = ${moneyEntry.dollars.toFixed(2)}
+          </Badge>
+        )}
+        {showAmountAvailable && !isNonUSD && (
+          <TextLight>{i18.dollarsAvailable(dollarsAvailStr)}</TextLight>
+        )}
+      </View>
     </View>
   );
 }
 
 function AmountInput({
-  dollars,
+  moneyEntry,
   onChange,
   innerRef,
   autoFocus,
-  lagAutoFocus,
   disabled,
   onFocus,
 }: {
-  dollars: number;
-  onChange: (dollars: number) => void;
+  moneyEntry: LocalMoneyEntry;
+  onChange: (dollars: LocalMoneyEntry) => void;
   innerRef?: React.RefObject<TextInput>;
   autoFocus?: boolean;
-  lagAutoFocus?: boolean;
   disabled?: boolean;
   onFocus?: () => void;
 }) {
-  if (dollars < 0) throw new Error("AmountPicker value can't be negative");
+  const { localUnits, currency } = moneyEntry;
+  if (localUnits < 0) throw new Error("AmountPicker value can't be negative");
 
-  const fmt = (dollars: number) => getAmountText({ dollars, symbol: "" });
+  const fmt = (units: number) =>
+    units.toFixed(currency.decimals).replace(".", amountSeparator);
 
-  const [strVal, setStrVal] = useState(dollars <= 0 ? "" : fmt(dollars));
+  const [strVal, setStrVal] = useState(localUnits <= 0 ? "" : fmt(localUnits));
 
   // While typing, show whatever the user is typing
-  const change = useCallback((text: string) => {
+  const change = (text: string) => {
     if (disabled) return;
 
     // Haptic (tactile) feedback on each keypress
@@ -99,27 +119,30 @@ function AmountInput({
     // Validate. Handle negative numbers, NaN, out of range.
     const looksValid = /^(|0|(0?[.,]\d*)|([1-9]\d*[.,]?\d*))$/.test(text);
     const newVal = parseLocalFloat(text);
-    if (!looksValid || !(newVal >= 0) || newVal >= MAX_DOLLAR_INPUT_EXCLUSIVE) {
+    const maxVal = Math.pow(10, MAX_TOTAL_DIGITS - currency.decimals);
+    if (!looksValid || !(newVal >= 0) || newVal >= maxVal) {
       // reject input
       return;
     }
 
-    // Max two decimals: if necessary, modify entry
+    // Max n decimals: if necessary, modify entry
+    const { decimals } = currency;
     const parts = text.split(/[.,]/);
     if (parts.length >= 2) {
-      const roundedStr = `${parts[0]}${amountSeparator}${parts[1].slice(0, 2)}`;
-      const roundedVal = parseLocalFloat(`${parts[0]}.${parts[1].slice(0, 2)}`);
+      const fractional = parts[1].slice(0, decimals);
+      const roundedStr = `${parts[0]}${amountSeparator}${fractional}`;
+      const roundedVal = parseLocalFloat(`${parts[0]}.${fractional}`);
       setStrVal(roundedStr);
-      onChange(roundedVal);
+      onChange({ currency, localUnits: roundedVal });
       return;
     }
 
     // Accept entry as-is
     setStrVal(text);
-    onChange(newVal);
-  }, []);
+    onChange({ currency, localUnits: newVal });
+  };
 
-  // Once we're done, round value to 2 decimal places
+  // Once we're done, format value to n decimal places
   const onBlur = (e: NativeSyntheticEvent<TextInputEndEditingEventData>) => {
     const value = e.nativeEvent.text;
     console.log(`[INPUT] onBlur finalizing ${value}`);
@@ -132,75 +155,156 @@ function AmountInput({
     setStrVal(newVal > 0 ? newStrVal : "");
 
     const truncated = parseLocalFloat(newStrVal);
-    onChange(truncated);
+    onChange({ currency, localUnits: truncated });
   };
 
   const otherRef = useRef<TextInput>(null);
   const ref = innerRef || otherRef;
+
+  // Controlled component, but with state to allow typing "0", "0.", etc.
+  useEffect(() => {
+    if (ref.current?.isFocused()) return;
+    setStrVal(localUnits <= 0 ? "" : fmt(localUnits));
+  }, [localUnits]);
 
   const focus = useCallback(() => {
     ref.current?.focus();
     if (onFocus) onFocus();
   }, [ref, onFocus]);
 
-  const isFocused = useIsFocused();
-  const nav = useNav();
-
-  useEffect(() => {
-    // Re-focus after screen transition animations finish.
-    // This is a workaround for a bug in react-navigation where autoFocus
-    // doesn't persist across screen animations.
-    nav.addListener("transitionEnd", () => {
-      if (lagAutoFocus && isFocused) focus();
-      if (!isFocused) ref.current?.blur();
-    });
-  }, [isFocused, lagAutoFocus]);
+  // Currency picker
+  const account = useAccount();
+  const allCurrencies = [currencyRateUSD, ...(account?.exchangeRates || [])];
+  const onSetCurrency = (currency: CurrencyExchangeRate) => {
+    onChange({ currency, localUnits });
+  };
+  const showPicker = !disabled;
 
   return (
-    <TouchableWithoutFeedback onPress={focus}>
-      <View style={styles.amountInputWrap}>
-        <Text style={styles.amountDollar}>$</Text>
-        <TextInput
-          ref={ref}
-          style={styles.amountInput}
-          keyboardType="numeric"
-          placeholder="0"
-          placeholderTextColor={color.grayMid}
-          numberOfLines={1}
-          focusable={!disabled}
-          editable={!disabled}
-          selectTextOnFocus
-          autoFocus={lagAutoFocus ? false : autoFocus ?? true}
-          value={strVal}
-          onChangeText={change}
-          onEndEditing={onBlur} /* called on blur, works on Android */
-          onTouchEnd={focus}
-        />
+    <TouchableWithoutFeedback onPress={focus} accessible={false}>
+      <View style={styles.amountRow}>
+        {showPicker && <CurrencyPicker {...{ allCurrencies, onSetCurrency }} />}
+        <View style={styles.amountInputWrap}>
+          <DaimoText style={styles.amountDollar}>{currency.symbol}</DaimoText>
+          <TextInput
+            ref={ref}
+            style={styles.amountInput}
+            keyboardType="numeric"
+            placeholder="0"
+            placeholderTextColor={color.grayMid}
+            numberOfLines={1}
+            maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+            focusable={!disabled}
+            editable={!disabled}
+            selectTextOnFocus
+            autoFocus={autoFocus}
+            value={strVal}
+            onChangeText={change}
+            onEndEditing={onBlur} /* called on blur, works on Android */
+            onTouchEnd={focus}
+          />
+        </View>
+        {!disabled && <View style={styles.currencyPickerWrap} /* center */ />}
       </View>
     </TouchableWithoutFeedback>
   );
 }
 
+function CurrencyPicker({
+  allCurrencies,
+  onSetCurrency,
+}: {
+  allCurrencies: CurrencyExchangeRate[];
+  onSetCurrency: (currency: CurrencyExchangeRate) => void;
+}) {
+  const choose = (val: CurrencyExchangeRate) => {
+    if (val == null) return;
+    onSetCurrency(val);
+  };
+
+  return (
+    <View style={styles.currencyPickerWrap}>
+      <SelectDropdown
+        data={allCurrencies}
+        defaultValue={currencyRateUSD}
+        onSelect={choose}
+        renderButton={() => (
+          <View style={styles.currencyButton}>
+            <DropdownPickButton />
+          </View>
+        )}
+        renderItem={(c) => (
+          <View>
+            <CurrencyPickItem currency={c} />
+          </View>
+        )}
+        showsVerticalScrollIndicator
+        dropdownStyle={styles.currencyDropdown}
+      />
+    </View>
+  );
+}
+
+function CurrencyPickItem({ currency }: { currency: CurrencyExchangeRate }) {
+  return (
+    <View
+      style={{
+        borderBottomWidth: 1,
+        borderBottomColor: color.grayLight,
+        paddingHorizontal: 24,
+        paddingVertical: 13,
+        flexDirection: "row",
+        justifyContent: "space-between",
+      }}
+    >
+      <DaimoText variant="dropdown">
+        {currency.name} ({currency.currency})
+      </DaimoText>
+      <DaimoText variant="dropdown">{currency.symbol}</DaimoText>
+    </View>
+  );
+}
+
+const dim = Dimensions.get("window");
+const isSmall = dim.width < 375;
+
 const styles = StyleSheet.create({
+  amountRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   amountInputWrap: {
+    flexShrink: 1,
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 4,
   },
   amountDollar: {
-    flexGrow: 1,
-    fontSize: 56,
+    fontSize: isSmall ? 50 : 56,
     fontWeight: "600",
     paddingBottom: 2,
     color: color.midnight,
     textAlign: "right",
   },
   amountInput: {
-    flexGrow: 1,
-    fontSize: 64,
+    fontSize: isSmall ? 56 : 64,
     fontWeight: "600",
     fontVariant: ["tabular-nums"],
     color: color.midnight,
+  },
+  currencyPickerWrap: {
+    width: 40,
+    height: 40,
+  },
+  currencyButton: {
+    padding: 8,
+  },
+  currencyDropdown: {
+    width: 256,
+    backgroundColor: color.white,
+    borderRadius: 13,
+    flexDirection: "column",
   },
 });
 

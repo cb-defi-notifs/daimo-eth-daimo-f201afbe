@@ -1,10 +1,10 @@
+import { assert } from "@daimo/common";
 import Octicons from "@expo/vector-icons/Octicons";
-import { useCallback } from "react";
+import { ReactNode, useCallback } from "react";
 import { StyleSheet, TouchableHighlight, View } from "react-native";
 
 import { OctName } from "./InputBig";
 import { OfflineHeader } from "./OfflineHeader";
-import { useNav } from "./nav";
 import { color, touchHighlightUnderlay } from "./style";
 import { TextH3 } from "./text";
 
@@ -12,35 +12,38 @@ export function ScreenHeader({
   title,
   onBack,
   onExit,
+  onShare,
+  hideOfflineHeader,
+  secondaryHeader,
 }: {
-  title: string;
+  title: ReactNode;
   onBack?: () => void;
   onExit?: () => void;
+  onShare?: () => void;
+  hideOfflineHeader?: boolean;
+  secondaryHeader?: ReactNode;
 }) {
+  assert(!onExit || !onShare, "Exit and share are mutually exclusive");
+
   const back = useCallback(onBack || (() => {}), [onBack]);
   const exit = useCallback(onExit || (() => {}), [onExit]);
+  const share = useCallback(onShare || (() => {}), [onShare]);
 
   return (
     <>
-      <OfflineHeader />
+      {!hideOfflineHeader && <OfflineHeader />}
+      {secondaryHeader}
       <View style={styles.screenHead}>
         <ScreenHeadButton icon="arrow-left" show={!!onBack} onPress={back} />
         <TextH3>{title}</TextH3>
-        <ScreenHeadButton icon="x" show={!!onExit} onPress={exit} />
+        {onExit ? (
+          <ScreenHeadButton icon="x" show={!!onExit} onPress={exit} />
+        ) : (
+          <ScreenHeadButton icon="share" show={!!onShare} onPress={share} />
+        )}
       </View>
     </>
   );
-}
-
-export function useExitToHome() {
-  const nav = useNav();
-  return useCallback(() => nav.navigate("HomeTab", { screen: "Home" }), []);
-}
-
-export function useExitBack() {
-  const nav = useNav();
-  const goBack = useCallback(() => nav.goBack(), []);
-  return nav.canGoBack() ? goBack : undefined;
 }
 
 /** Shows a nav button if `show`, blank placeholder otherwise. */

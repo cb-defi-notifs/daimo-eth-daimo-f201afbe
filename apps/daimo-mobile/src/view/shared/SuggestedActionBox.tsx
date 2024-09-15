@@ -1,8 +1,8 @@
-import { SuggestedAction } from "@daimo/api";
+import { SuggestedAction } from "@daimo/common";
 import { daimoChainFromId } from "@daimo/contract";
 import Octicons from "@expo/vector-icons/Octicons";
 import { TouchableOpacity } from "@gorhom/bottom-sheet";
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { GestureResponderEvent, Linking, StyleSheet, View } from "react-native";
 import { PanGestureHandler } from "react-native-gesture-handler";
 import Animated, {
@@ -15,11 +15,12 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { OctName } from "./InputBig";
-import { handleDeepLink, useNav } from "./nav";
 import { color } from "./style";
 import { TextBody, TextMeta } from "./text";
-import { env } from "../../logic/env";
-import { getAccountManager, useAccount } from "../../model/account";
+import { DispatcherContext } from "../../action/dispatch";
+import { handleDeepLink, useNav } from "../../common/nav";
+import { getAccountManager, useAccount } from "../../logic/accountManager";
+import { getRpcFunc } from "../../logic/trpc";
 
 export function SuggestedActionBox({
   action,
@@ -29,7 +30,8 @@ export function SuggestedActionBox({
   onHideAction?(): void;
 }) {
   const nav = useNav();
-  const [account] = useAccount();
+  const account = useAccount();
+  const dispatcher = useContext(DispatcherContext);
 
   // Action to display
   const { icon, title, subtitle } = action;
@@ -40,11 +42,11 @@ export function SuggestedActionBox({
   const y = useSharedValue(-100);
   const opacity = useSharedValue(0);
   const scale = useSharedValue(1);
-  const xButtonPos = useSharedValue({ x: 0 });
+  const xButtonPos = useSharedValue(0);
   const wasCancelled = useSharedValue(false);
 
   // Track when we do the action or dismiss it.
-  const { rpcFunc } = env(daimoChainFromId(account!.homeChainId));
+  const rpcFunc = getRpcFunc(daimoChainFromId(account!.homeChainId));
 
   // Press = do the suggested action.
   const onPress = () => {
@@ -52,7 +54,7 @@ export function SuggestedActionBox({
     console.log(`[SUGGESTED] executing ${action.id}: ${action.title}`);
 
     if (action.url.startsWith("daimo")) {
-      handleDeepLink(nav, action.url); // daimo:// direct deeplinks
+      handleDeepLink(nav, dispatcher, action.url, account.homeChainId); // daimo:// direct deeplinks
     } else {
       Linking.openURL(action.url); // https://, mailto://, ...
     }
@@ -91,7 +93,7 @@ export function SuggestedActionBox({
     });
   };
 
-  const onPressX = (e?: GestureResponderEvent) => {
+  const onPressX = (e: GestureResponderEvent) => {
     e?.stopPropagation();
     opacity.value = withTiming(0, {}, () => {
       runOnJS(onDismiss)();
@@ -110,7 +112,7 @@ export function SuggestedActionBox({
   const gestureHandler = useAnimatedGestureHandler({
     onStart: (event, ctx: { startX: number; eventCancelled: boolean }) => {
       ctx.eventCancelled = false;
-      if (event.x > xButtonPos.value.x) {
+      if (event.x > xButtonPos.value) {
         ctx.eventCancelled = true;
       }
       if (!ctx.eventCancelled) {
@@ -181,7 +183,12 @@ export function SuggestedActionBox({
   return (
     <PanGestureHandler onGestureEvent={gestureHandler}>
       <Animated.View style={[styles.animatedWrapper, animatedStyle]}>
-        <View style={styles.bubble}>
+        <View
+          style={styles.bubble}
+          onLayout={(e) => {
+            xButtonPos.value = e.nativeEvent.layout.width - 40;
+          }}
+        >
           <View style={styles.bubbleIcon}>
             {!icon && <TextBody color={color.white}>i</TextBody>}
             {icon && (
@@ -195,9 +202,6 @@ export function SuggestedActionBox({
           <TouchableOpacity
             onPress={onPressX}
             style={styles.bubbleExit}
-            onLayout={(e) => {
-              xButtonPos.value = e.nativeEvent.layout;
-            }}
             hitSlop={16}
           >
             <Octicons name="x" size={24} color={color.grayDark} />

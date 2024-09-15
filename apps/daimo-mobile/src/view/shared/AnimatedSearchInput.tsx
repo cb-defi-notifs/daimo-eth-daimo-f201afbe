@@ -1,7 +1,8 @@
 import Octicons from "@expo/vector-icons/Octicons";
-import { RefObject, useCallback, useRef, useState } from "react";
+import { RefObject, useCallback, useEffect, useRef, useState } from "react";
 import {
   Dimensions,
+  LayoutChangeEvent,
   Platform,
   StyleSheet,
   TextInput,
@@ -10,87 +11,123 @@ import {
   ViewStyle,
 } from "react-native";
 import Animated, {
-  measure,
   useAnimatedRef,
   useAnimatedStyle,
+  useSharedValue,
   withTiming,
 } from "react-native-reanimated";
 
 import { OctName } from "./InputBig";
 import { color, ss } from "./style";
+import { MAX_FONT_SIZE_MULTIPLIER } from "./text";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
+const INITIAL_WIDTH = SCREEN_WIDTH - 16 * 2;
+const ICONS = (50 + 16) * 2;
+const BACK_ICON = 30 + 8;
+
 const animationConfig = { duration: 150 };
 
-export function AnimatedSearchInput({
-  value,
-  onChange,
-  onFocus,
-  onBlur,
-  placeholder,
-  icon,
-  center,
-  autoFocus,
-  innerRef,
-  style,
-}: {
-  value: string;
+interface AnimatedSearchInputProps {
+  value?: string;
   onChange: (value: string) => void;
   onFocus?: () => void;
   onBlur?: () => void;
+  onClose?: () => void;
   placeholder?: string;
   icon?: OctName;
   center?: boolean;
   autoFocus?: boolean;
   innerRef?: RefObject<TextInput>;
   style?: ViewStyle;
-}) {
+}
+
+export const AnimatedSearchInput = ({
+  value,
+  onChange,
+  onFocus,
+  onBlur,
+  onClose,
+  placeholder,
+  icon,
+  center,
+  autoFocus,
+  innerRef,
+  style,
+}: AnimatedSearchInputProps) => {
+  const closedWidth = useSharedValue(INITIAL_WIDTH - ICONS);
+  const openWidth = useSharedValue(INITIAL_WIDTH - BACK_ICON);
+  const animatedWidth = useSharedValue(closedWidth.value);
+
+  const closedLeft = 0;
+  const openLeft = BACK_ICON / 2;
+  const animatedLeft = useSharedValue(closedLeft);
+
+  const animateOpenInput = () => {
+    animatedWidth.value = withTiming(openWidth.value, animationConfig);
+    animatedLeft.value = withTiming(openLeft, animationConfig);
+  };
+
+  const animateCloseInput = () => {
+    animatedWidth.value = withTiming(closedWidth.value, animationConfig);
+    animatedLeft.value = withTiming(closedLeft, animationConfig);
+  };
+
   const [isFocused, setIsFocused] = useState(false);
   const onInputFocus = useCallback(() => {
+    animateOpenInput();
     setIsFocused(true);
     onFocus?.();
   }, []);
   const onInputBlur = useCallback(() => {
+    if (value?.length === 0) {
+      animateCloseInput();
+      onClose?.();
+    }
     setIsFocused(false);
     onBlur?.();
-  }, []);
+  }, [value]);
+
+  useEffect(() => {
+    if (value === undefined) animateCloseInput();
+  }, [value]);
 
   // Android text input incorrectly autocapitalizes. Fix via password input.
   const needsAndroidWorkaround = Platform.OS === "android";
 
   const otherRef = useRef<TextInput>(null);
   const wrapperRef = useAnimatedRef<View>();
-  const ref = innerRef || otherRef;
+  const inputRef = innerRef || otherRef;
   const focus = useCallback(() => {
-    ref.current?.focus();
-  }, [ref]);
+    inputRef.current?.focus();
+  }, []);
 
   const wrapperStyle = useAnimatedStyle(() => {
-    const screenMargins = 16 * 2;
-    const icons = (50 + 16) * 2;
-    const backIcon = 30 + 8;
-    let closedWidth = SCREEN_WIDTH - screenMargins - icons;
-    let openWidth = SCREEN_WIDTH - screenMargins - backIcon;
-
-    if (measure(wrapperRef)) {
-      const componentWidth = measure(wrapperRef).width;
-      closedWidth = componentWidth - icons;
-      openWidth = componentWidth - backIcon;
-    }
-
     return {
-      width: isFocused
-        ? withTiming(openWidth, animationConfig)
-        : withTiming(closedWidth, animationConfig),
-      left: isFocused
-        ? withTiming(backIcon / 2, animationConfig)
-        : withTiming(0, animationConfig),
+      width: animatedWidth.value,
+      left: animatedLeft.value,
     };
   });
 
+  const onLayout = (event: LayoutChangeEvent) => {
+    const newClosedWidth = event.nativeEvent.layout.width - ICONS;
+    const newOpenWidth = event.nativeEvent.layout.width - BACK_ICON;
+
+    closedWidth.value = newClosedWidth;
+    openWidth.value = newOpenWidth;
+
+    animatedWidth.value = isFocused ? newOpenWidth : newClosedWidth;
+    animatedLeft.value = isFocused ? openLeft : closedLeft;
+  };
+
   return (
-    <View style={styles.wrapperStyle} ref={wrapperRef} pointerEvents="box-none">
-      <TouchableWithoutFeedback onPress={focus} hitSlop={8}>
+    <View
+      style={styles.wrapperStyle}
+      ref={wrapperRef}
+      pointerEvents="box-none"
+      onLayout={onLayout}
+    >
+      <TouchableWithoutFeedback onPress={focus} hitSlop={8} accessible={false}>
         <Animated.View
           style={[
             isFocused ? styles.inputRowFocused : styles.inputRow,
@@ -98,8 +135,13 @@ export function AnimatedSearchInput({
             wrapperStyle,
           ]}
         >
+          {icon && (
+            <Animated.View style={styles.inputIcon}>
+              <Octicons name={icon} size={18} color={color.primary} />
+            </Animated.View>
+          )}
           <TextInput
-            ref={ref}
+            ref={inputRef}
             placeholder={placeholder}
             placeholderTextColor={color.grayMid}
             value={value}
@@ -107,8 +149,10 @@ export function AnimatedSearchInput({
             style={center ? styles.inputCentered : styles.input}
             multiline={Platform.OS === "android" && center}
             numberOfLines={1}
+            maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
             autoCapitalize="none"
             autoCorrect={false}
+            spellCheck={false}
             autoFocus={autoFocus}
             secureTextEntry={needsAndroidWorkaround}
             keyboardType={
@@ -116,17 +160,13 @@ export function AnimatedSearchInput({
             }
             onFocus={onInputFocus}
             onBlur={onInputBlur}
+            selectTextOnFocus
           />
-          {icon && (
-            <Animated.View style={styles.inputIcon}>
-              <Octicons name={icon} size={18} color={color.primary} />
-            </Animated.View>
-          )}
         </Animated.View>
       </TouchableWithoutFeedback>
     </View>
   );
-}
+};
 
 const inputRow = {
   height: 48,
@@ -143,8 +183,8 @@ const input = {
   position: "absolute",
   top: 0,
   bottom: 0,
-  left: 16,
-  right: 40,
+  left: 48,
+  right: 16,
   paddingTop: 0,
   paddingVertical: 0,
 } as const;
@@ -164,7 +204,7 @@ const styles = StyleSheet.create({
   inputIcon: {
     position: "absolute",
     top: 13,
-    right: 20,
+    left: 20,
     width: 16,
     alignContent: "center",
     justifyContent: "center",

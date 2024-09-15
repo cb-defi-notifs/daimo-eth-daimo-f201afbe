@@ -1,10 +1,13 @@
 {
   "name": "@daimo/contract",
-  "version": "0.1.0",
+  "version": "0.2.7",
   "description": "Daimo contracts, ABIs, and generated Typescript types",
   "types": "./dist/index.d.ts",
   "main": "./dist/index.js",
   "scripts": {
+    "fetch": "npm run fetch:tokens && npm run fetch:feeds",
+    "fetch:tokens": "tsx ./script/gen-tokens.ts",
+    "fetch:feeds": "tsx ./script/gen-feeds.ts",
     "codegen": "wagmi -v && wagmi generate",
     "build": "tsc"
   },
@@ -14,8 +17,15 @@
     "@pimlico/erc20-paymaster": "^0.1.1",
     "@tsconfig/node20": "^20.1.0",
     "@wagmi/cli": "^1.4.1",
-    "typescript": "5.2.2",
+    "tsx": "^4.7.2",
+    "typescript": "^5.3.0",
     "userop": "^0.3.2",
     "viem": "^1.19.15"
-  }
+  },
+  "files": [
+    "dist/",
+    "node_modules/",
+    "package.json",
+    "README.md"
+  ]
 }

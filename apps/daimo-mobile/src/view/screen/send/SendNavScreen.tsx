@@ -1,51 +1,41 @@
-import { useIsFocused } from "@react-navigation/native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Keyboard, TouchableWithoutFeedback, View } from "react-native";
 import { TextInput } from "react-native-gesture-handler";
 
-import { SearchTab } from "./SearchTab";
-import { ScreenHeader, useExitToHome } from "../../shared/ScreenHeader";
+import { ParamListSend } from "../../../common/nav";
+import { i18n } from "../../../i18n";
+import { ScreenHeader } from "../../shared/ScreenHeader";
+import { SearchScreen } from "../../shared/SearchScreen";
 import Spacer from "../../shared/Spacer";
-import {
-  ParamListSend,
-  useFocusOnScreenTransitionEnd,
-  useNav,
-} from "../../shared/nav";
 import { ss } from "../../shared/style";
 
 type Props = NativeStackScreenProps<ParamListSend, "SendNav">;
+const i18 = i18n.sendNav;
 
 export function SendNavScreen({ route }: Props) {
   const { autoFocus } = route.params || {};
 
-  const nav = useNav();
-  const goHome = useExitToHome();
-  const goBack = nav.canGoBack() ? nav.goBack : goHome;
+  // Search prefix
+  // Clear prefix on back button
+  const [prefix, setPrefix] = useState("");
+
+  // Focus search box if autoFocus is true
+  // Work around react-navigation autofocus bug
+  const textInputRef = useRef<TextInput>(null);
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <View style={ss.container.screen}>
-        <ScreenHeader title="Send" onBack={goBack} />
+        <ScreenHeader title={i18.screenHeader()} />
         <Spacer h={8} />
-        <SendNav {...{ autoFocus }} />
+        <View style={{ flex: 1, flexDirection: "column" }}>
+          <SearchScreen
+            {...{ prefix, setPrefix, textInputRef, autoFocus }}
+            mode="send"
+          />
+        </View>
       </View>
     </TouchableWithoutFeedback>
-  );
-}
-
-function SendNav({ autoFocus }: { autoFocus: boolean }) {
-  // Navigation
-  const textInputRef = useRef<TextInput>(null);
-  const isFocused = useIsFocused();
-  const nav = useNav();
-
-  // Work around react-navigation autofocus bug
-  useFocusOnScreenTransitionEnd(textInputRef, nav, isFocused, autoFocus);
-
-  return (
-    <View style={{ flex: 1, flexDirection: "column" }}>
-      <SearchTab autoFocus={false} textInnerRef={textInputRef} />
-    </View>
   );
 }

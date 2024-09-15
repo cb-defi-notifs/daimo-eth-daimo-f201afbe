@@ -1,68 +1,101 @@
 import {
   DaimoLinkAccount,
   formatDaimoLink,
-  formatDaimoLinkDirect,
-  getAccountName,
-  parseDaimoLink,
+  getAddressContraction,
 } from "@daimo/common";
 import Octicons from "@expo/vector-icons/Octicons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { BarCodeScannedCallback } from "expo-barcode-scanner";
-import { useRef, useState } from "react";
-import { Linking, Platform, Share, StyleSheet, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
+import { useState } from "react";
+import {
+  Linking,
+  Platform,
+  Pressable,
+  Share,
+  StyleSheet,
+  View,
+} from "react-native";
 import QRCode from "react-native-qrcode-svg";
 
-import { useAccount } from "../../model/account";
-import { ButtonCircle } from "../shared/ButtonCircle";
-import { Scanner } from "../shared/Scanner";
-import {
-  ScreenHeader,
-  useExitBack,
-  useExitToHome,
-} from "../shared/ScreenHeader";
-import { SegmentSlider } from "../shared/SegmentSlider";
-import Spacer from "../shared/Spacer";
-import image from "../shared/image";
 import {
   ParamListHome,
   QRScreenOptions,
-  useDisableTabSwipe,
+  defaultError,
+  useExitBack,
+  useExitToHome,
   useNav,
-} from "../shared/nav";
+} from "../../common/nav";
+import { i18n } from "../../i18n";
+import { useAccount } from "../../logic/accountManager";
+import { decodeQR } from "../../logic/decodeQR";
+import { TextButton } from "../shared/Button";
+import { ButtonCircle } from "../shared/ButtonCircle";
+import { Scanner } from "../shared/Scanner";
+import { ScreenHeader } from "../shared/ScreenHeader";
+import { SegmentSlider } from "../shared/SegmentSlider";
+import Spacer from "../shared/Spacer";
+import image from "../shared/image";
 import { color, ss } from "../shared/style";
 import { TextCenter, TextH3, TextLight } from "../shared/text";
 
 type Props = NativeStackScreenProps<ParamListHome, "QR">;
+const i18 = i18n.qr;
+
+const tabs = ["PayMe", "Scan"] as QRScreenOptions[];
+const localTabs = [i18.slider.payMe(), i18.slider.scan()];
 
 export function QRScreen(props: Props) {
   const { option } = props.route.params;
-  const [tab, setTab] = useState<QRScreenOptions>(option || "PAY ME");
-  const tabs = useRef(["PAY ME", "SCAN"] as QRScreenOptions[]).current;
-  const title = tab === "PAY ME" ? "Display QR Code" : "Scan QR Code";
+  const [tab, setTab] = useState<QRScreenOptions>(option || "PayMe");
+
+  // Localization
+  const localTab = localTabs[tabs.indexOf(tab)];
+  const setLocalTab = (l: string) => setTab(tabs[localTabs.indexOf(l)]);
+
+  const title = tab === "PayMe" ? i18.title.display() : i18.title.scan();
 
   const goBack = useExitBack();
   const goHome = useExitToHome();
-
-  const nav = useNav();
-  useDisableTabSwipe(nav);
 
   return (
     <View style={ss.container.screen}>
       <ScreenHeader title={title} onBack={goBack || goHome} />
       <Spacer h={8} />
-      <SegmentSlider {...{ tabs, tab, setTab }} />
+      <SegmentSlider tabs={localTabs} tab={localTab} setTab={setLocalTab} />
       <Spacer h={24} />
-      {tab === "PAY ME" && <QRDisplay />}
-      {tab === "SCAN" && <QRScan />}
+      {tab === "PayMe" && <QRDisplay />}
+      {tab === "Scan" && <QRScan />}
     </View>
   );
 }
 
 function QRDisplay() {
-  const [account] = useAccount();
+  const [recentlyCopied, setRecentlyCopied] = useState(false);
+  const account = useAccount();
+  const nav = useNav();
   if (account == null) return null;
 
   const url = formatDaimoLink({ type: "account", account: account.name });
+
+  const subtitle = recentlyCopied
+    ? i18.copiedAddress()
+    : getAddressContraction(account.address);
+
+  const onLongPress = () => {
+    console.log(`[QR] copying address ${account.address}`);
+    Clipboard.setStringAsync(account.address);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setRecentlyCopied(true);
+    setTimeout(() => setRecentlyCopied(false), 1000);
+  };
+
+  const goToDeposit = () => {
+    nav.navigate("DepositTab", {
+      screen: "Deposit",
+    });
+  };
 
   return (
     <View>
@@ -70,16 +103,19 @@ function QRDisplay() {
       <Spacer h={16} />
       <View style={styles.accountShare}>
         <Spacer w={64} />
-        <View>
+        <Pressable onLongPress={onLongPress}>
           <TextCenter>
             <TextH3>{account.name}</TextH3>
           </TextCenter>
           <Spacer h={4} />
           <TextCenter>
-            <TextLight>{getAccountName({ addr: account.address })}</TextLight>
+            <TextLight>{subtitle}</TextLight>
           </TextCenter>
-        </View>
+        </Pressable>
         <ShareButton name={account.name} />
+      </View>
+      <View style={styles.accountShare}>
+        <TextButton title={i18.depositButton()} onPress={goToDeposit} />
       </View>
     </View>
   );
@@ -110,7 +146,15 @@ function ShareButton({ name }: { name: string }) {
   );
 }
 
-export function QRCodeBox({ value }: { value: string }) {
+export function QRCodeBox({
+  value,
+  logoURI,
+}: {
+  value: string;
+  logoURI?: string;
+}) {
+  if (logoURI == null) logoURI = image.qrLogo;
+
   return (
     <View style={styles.qrBackground}>
       <View style={styles.qrWrap}>
@@ -118,8 +162,8 @@ export function QRCodeBox({ value }: { value: string }) {
           value={value}
           color={color.midnight}
           size={192}
-          logo={{ uri: image.qrLogo }}
-          logoSize={72}
+          logo={{ uri: logoURI }}
+          logoSize={64}
         />
       </View>
     </View>
@@ -128,18 +172,17 @@ export function QRCodeBox({ value }: { value: string }) {
 
 function QRScan() {
   const [handled, setHandled] = useState(false);
+  const nav = useNav();
 
   const handleBarCodeScanned: BarCodeScannedCallback = async ({ data }) => {
     if (handled) return;
 
-    const daimoLink = parseDaimoLink(data);
-    if (daimoLink == null) return;
+    const link = decodeQR(data);
+    if (link == null) return nav.navigate("LinkErrorModal", defaultError);
     setHandled(true);
-
-    const directLink = formatDaimoLinkDirect(daimoLink);
-    console.log(`[SCAN] opening URL ${directLink}`);
-
-    Linking.openURL(directLink);
+    console.log(`[SCAN] opening URL ${link}`);
+    await Linking.openURL(link);
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
   return <Scanner handleBarCodeScanned={handleBarCodeScanned} />;

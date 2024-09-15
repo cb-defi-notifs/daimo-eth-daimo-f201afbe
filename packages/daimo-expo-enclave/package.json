@@ -10,7 +10,7 @@
     "clean": "expo-module clean",
     "lint": "expo-module lint",
     "test": "echo No tests yet",
-    "prepare": "expo-module prepare",
+    "prepare": "expo-module build",
     "prepublishOnly": "expo-module prepublishOnly",
     "expo-module": "expo-module"
   },
@@ -24,10 +24,8 @@
   "repository": "https://github.com/daimo-eth/daimo/tree/master/packages/daimo-expo-enclave",
   "author": "Daimo",
   "devDependencies": {
-    "@types/react": "^18.2.15",
-    "@types/react-native": "^0.72.2",
-    "expo-module-scripts": "^3.0.11",
-    "expo-modules-core": "^1.5.11"
+    "@types/react": "~18.2.45",
+    "expo-module-scripts": "^3.0.11"
   },
   "peerDependencies": {
     "expo": "*",

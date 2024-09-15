@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "forge-std/console2.sol";
 import "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import "openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol";
+import "openzeppelin-contracts/contracts/utils/cryptography/MessageHashUtils.sol";
 import "../src/DaimoEphemeralNotes.sol";
 
 contract TestDAI is ERC20 {
@@ -27,9 +28,6 @@ contract EphemeralNotesTest is Test {
     address constant ALICE = address(0x123);
     address constant BOB = address(0x456);
 
-    event NoteCreated(Note note);
-    event NoteRedeemed(Note note, address redeemer);
-
     function setUp() public {
         token = new TestDAI("TestDAI", "DAI");
         notes = new DaimoEphemeralNotes(token);
@@ -39,7 +37,7 @@ contract EphemeralNotesTest is Test {
     function createEphemeralSignature(
         address redeemer
     ) internal pure returns (bytes memory) {
-        bytes32 messageHash = ECDSA.toEthSignedMessageHash(
+        bytes32 messageHash = MessageHashUtils.toEthSignedMessageHash(
             keccak256(abi.encodePacked(redeemer))
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(
@@ -51,8 +49,8 @@ contract EphemeralNotesTest is Test {
         return signature;
     }
 
-    function testECDSA() public {
-        bytes32 messageHash = ECDSA.toEthSignedMessageHash(
+    function testECDSA() public view {
+        bytes32 messageHash = MessageHashUtils.toEthSignedMessageHash(
             keccak256(abi.encodePacked(ALICE))
         );
         assertTrue(
@@ -72,7 +70,7 @@ contract EphemeralNotesTest is Test {
             from: ALICE,
             amount: 500
         });
-        emit NoteCreated(expectedNote);
+        emit DaimoEphemeralNotes.NoteCreated(expectedNote);
         notes.createNote(ephemeralAddress, 500);
         vm.stopPrank();
     }
@@ -89,7 +87,7 @@ contract EphemeralNotesTest is Test {
             from: ALICE,
             amount: 500
         });
-        emit NoteRedeemed(expectedNote, BOB);
+        emit DaimoEphemeralNotes.NoteRedeemed(expectedNote, BOB);
         notes.claimNote(ephemeralAddress, createEphemeralSignature(BOB));
         vm.stopPrank();
 

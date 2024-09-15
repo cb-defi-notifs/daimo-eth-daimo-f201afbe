@@ -2,6 +2,7 @@ import { EAccountSearchResult, getAccountName } from "@daimo/common";
 import { Address, getAddress, isAddress } from "viem";
 import { normalize } from "viem/ens";
 
+import { ProfileCache } from "./profile";
 import { NameRegistry } from "../contract/nameRegistry";
 import { ViemClient } from "../network/viemClient";
 
@@ -10,14 +11,15 @@ import { ViemClient } from "../network/viemClient";
 export async function search(
   prefix: string,
   vc: ViemClient,
-  nameReg: NameRegistry
-) {
+  nameReg: NameRegistry,
+  profileCache: ProfileCache
+): Promise<EAccountSearchResult[]> {
   prefix = prefix.trim();
   if (prefix.startsWith("@")) prefix = prefix.slice(1);
 
-  // Show a santized, simplified view of what the user entered
+  // Show a sanitized, simplified view of what the user entered
   // This is important when eg entering an address > matches reverse ENS
-  // Othewise, you have no confirmation on send screen that it's the same addr.
+  // Otherwise, you have no confirmation on send screen that it's the same addr.
   // Also important when entering an ENS > get a *different* reverse ENS.
 
   let ret: EAccountSearchResult[];
@@ -34,6 +36,27 @@ export async function search(
     ret = dAccounts.map((d) => ({ ...d, originalMatch: d.name }));
   }
 
+  // Add Farcaster results
+  if (prefix.length > 1) {
+    const linkedAccs = profileCache.searchLinkedAccounts(prefix);
+    for (const link of linkedAccs) {
+      const eAcc = nameReg.getDaimoAccount(link.addr);
+      if (eAcc == null) continue;
+      ret.push({
+        ...eAcc,
+        originalMatch: ProfileCache.getDispUsername(link.linkedAccount),
+      });
+    }
+  }
+
+  // Deduplicate
+  const addrs = new Set<Address>();
+  ret = ret.filter((r) => {
+    if (addrs.has(r.addr)) return false;
+    addrs.add(r.addr);
+    return true;
+  });
+
   console.log(`[API] search: ${ret.length} results for '${prefix}'`);
   return ret;
 }
@@ -47,7 +70,10 @@ async function getResultFromAddr(
   return { ...eAcc, originalMatch };
 }
 
-async function tryGetEnsAddr(prefix: string, vc: ViemClient) {
+async function tryGetEnsAddr(
+  prefix: string,
+  vc: ViemClient
+): Promise<Address | null> {
   if (prefix.length < 3) return null;
   if (!prefix.includes(".")) return null;
   try {

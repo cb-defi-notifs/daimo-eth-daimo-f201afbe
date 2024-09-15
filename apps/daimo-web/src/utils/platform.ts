@@ -1,30 +1,40 @@
-export type PlatformType = "ios" | "android" | "other";
+import { appStoreLinks, PlatformType } from "@daimo/common";
+
+import { getAbsoluteUrl } from "./getAbsoluteUrl";
+import { LangDef } from "../i18n/languages/en";
 
 export function detectPlatform(ua: string): PlatformType {
   // From https://dev.to/konyu/using-javascript-to-determine-whether-the-client-is-ios-or-android-4i1j
   if (/android/i.test(ua)) {
     return "android";
-  } else if (/iPhone|iPod/.test(ua)) {
+  } else if (/iPhone|iPod|iPad/.test(ua)) {
     return "ios";
   }
   return "other";
 }
 
-// Mac app store 👀
-export const downloadMetadata = {
-  ios: {
-    title: "Download on App Store",
-    url: "https://apps.apple.com/us/app/daimo/id6459700343",
-    image: "/badge-app-store.svg",
-  },
-  android: {
-    title: "Get it on Google Play",
-    url: "https://play.google.com/store/apps/details?id=com.daimo",
-    image: "/badge-play-store.svg",
-  },
-  other: {
-    title: "Download on App Store",
-    url: "https://apps.apple.com/us/app/daimo/id6459700343",
-    image: "/badge-app-store.svg",
-  },
-};
+export function getDownloadMetadata(i18n: LangDef) {
+  const i18 = i18n.download.platforms;
+
+  return {
+    ios: {
+      title: i18.ios.title(),
+      url: appStoreLinks.ios,
+      image: "/badge-app-store.svg",
+    },
+    mac: {
+      title: i18.mac.title(),
+      url: appStoreLinks.ios,
+      image: "/badge-app-store.svg",
+    },
+    android: {
+      title: i18.android.title(),
+      url: appStoreLinks.android,
+      image: "/badge-play-store.svg",
+    },
+    other: {
+      title: i18.other.title(),
+      url: getAbsoluteUrl(`/download/other`),
+    },
+  };
+}

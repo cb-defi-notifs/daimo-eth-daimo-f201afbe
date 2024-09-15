@@ -1,4 +1,9 @@
-import { parseAndNormalizeSig } from "@daimo/common";
+import {
+  SlotType,
+  getSlotLabel,
+  getSlotType,
+  parseAndNormalizeSig,
+} from "@daimo/common";
 import { DaimoChain, daimoAccountABI } from "@daimo/contract";
 import * as ExpoPasskeys from "@daimo/expo-passkeys";
 import { SigningCallback } from "@daimo/userop";
@@ -11,9 +16,17 @@ import {
   hexToBytes,
 } from "viem";
 
-import { env } from "./env";
 import { Log } from "./log";
 import { parseCreateResponse, parseSignResponse } from "./passkeyParsers";
+import { env } from "../env";
+
+// Workaround iOS Passkeys AASA bug: https://github.com/daimo-eth/daimo/issues/837
+function matchAASABugError(e: string) {
+  // Match without english text since iOS errors are localized to device language
+  return e.includes("JV8PYC9QV4.com.daimo") && e.includes("daimo.com");
+}
+
+const AASA_BUG_MESSAGE = "iOS system error. Restart the app, then try again.";
 
 // Wrapper for Expo module native passkey creation
 export async function createPasskey(
@@ -21,24 +34,35 @@ export async function createPasskey(
   accountName: string,
   keySlot: number
 ) {
+  const useSecurityKey = getSlotType(keySlot) === SlotType.SecurityKeyBackup;
   console.log(
     "[PASSKEY] Creating passkey",
     accountName,
     keySlot,
-    env(daimoChain).passkeyDomain
+    env(daimoChain).passkeyDomain,
+    useSecurityKey
   );
   const passkeyName = `${accountName}.${keySlot}`;
-  const passkeyDisplayTitle = accountName; // Don't show metadata to the user
+
+  // Display title shows lowercase slot name, eg "alice passkey backup"
+  const slotLabel = getSlotLabel(keySlot).toLowerCase();
+  const passkeyDisplayTitle = `${accountName} ${slotLabel}`;
+
   const challengeB64 = btoa(`create key ${accountName} ${keySlot}`);
 
-  const result = await Log.promise(
+  const result = await Log.retryBackoff(
     "ExpoPasskeysCreate",
-    ExpoPasskeys.createPasskey({
-      domain: env(daimoChain).passkeyDomain,
-      passkeyName,
-      passkeyDisplayTitle,
-      challengeB64,
-    })
+    () =>
+      ExpoPasskeys.createPasskey({
+        domain: env(daimoChain).passkeyDomain,
+        passkeyName,
+        passkeyDisplayTitle,
+        challengeB64,
+        useSecurityKey,
+      }),
+    5,
+    matchAASABugError,
+    AASA_BUG_MESSAGE
   );
 
   console.log("[PASSKEY] Got creation result from expo module", result);
@@ -48,7 +72,8 @@ export async function createPasskey(
 
 // @daimo/userop compatible Signer for Webauthn signatures
 export function getWrappedPasskeySigner(
-  daimoChain: DaimoChain
+  daimoChain: DaimoChain,
+  useSecurityKey: boolean
 ): SigningCallback {
   return async (challengeHex: Hex) => {
     const bChallenge = hexToBytes(challengeHex);
@@ -65,7 +90,8 @@ export function getWrappedPasskeySigner(
       responseTypeLocation,
     } = await requestPasskeySignature(
       challengeB64,
-      env(daimoChain).passkeyDomain
+      env(daimoChain).passkeyDomain,
+      useSecurityKey
     );
     console.log("[PASSKEY] Got signature", derSig, accountName, keySlot);
 
@@ -94,16 +120,22 @@ export function getWrappedPasskeySigner(
   };
 }
 
-export async function requestPasskeySignature(
+async function requestPasskeySignature(
   challengeB64: string,
-  domain: string
+  domain: string,
+  useSecurityKey: boolean
 ) {
-  const result = await Log.promise(
+  const result = await Log.retryBackoff(
     "ExpoPasskeysSign",
-    ExpoPasskeys.signWithPasskey({
-      domain,
-      challengeB64,
-    })
+    () =>
+      ExpoPasskeys.signWithPasskey({
+        domain,
+        challengeB64,
+        useSecurityKey,
+      }),
+    5,
+    matchAASABugError,
+    AASA_BUG_MESSAGE
   );
   console.log("[PASSKEY] Got signature result from expo module", result);
 

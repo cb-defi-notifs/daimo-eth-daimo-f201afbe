@@ -5,8 +5,7 @@ import {
   timeAgo,
 } from "@daimo/common";
 import { DaimoChain, daimoChainFromId } from "@daimo/contract";
-import * as Notifications from "expo-notifications";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useContext, useState } from "react";
 import {
   Linking,
   ScrollView,
@@ -15,25 +14,45 @@ import {
   View,
 } from "react-native";
 
+import { DispatcherContext } from "../../action/dispatch";
+import { useNav } from "../../common/nav";
 import { useSendDebugLog } from "../../common/useSendDebugLog";
-import { env } from "../../logic/env";
-import { getPushNotificationManager } from "../../logic/notify";
+import { env } from "../../env";
+import { i18NLocale, i18n } from "../../i18n";
+import { useAccount } from "../../logic/accountManager";
+import { useNotificationsAccess } from "../../logic/notify";
 import { useTime } from "../../logic/time";
-import { Account, toEAccount, useAccount } from "../../model/account";
-import { AccountBubble } from "../shared/AccountBubble";
+import { Account, toEAccount } from "../../storage/account";
 import { AccountCopyLinkButton } from "../shared/AccountCopyLinkButton";
 import { Badge } from "../shared/Badge";
-import { ButtonMed, TextButton } from "../shared/Button";
-import { PendingDot } from "../shared/PendingDot";
-import { ScreenHeader, useExitToHome } from "../shared/ScreenHeader";
+import { ContactBubble } from "../shared/Bubble";
+import {
+  BadgeButton,
+  ButtonMed,
+  DescriptiveClickableRow,
+  TextButton,
+} from "../shared/Button";
+import { FarcasterButton } from "../shared/FarcasterBubble";
+import { Icon } from "../shared/Icon";
+import { ClockIcon, PlusIcon } from "../shared/Icons";
+import { ScreenHeader } from "../shared/ScreenHeader";
 import Spacer from "../shared/Spacer";
-import { useNav } from "../shared/nav";
+import { PendingDot } from "../shared/StatusDot";
+import { openSupportTG } from "../shared/error";
 import { color, ss, touchHighlightUnderlay } from "../shared/style";
-import { TextBody, TextH3, TextLight, TextMeta } from "../shared/text";
+import {
+  TextBody,
+  TextBodyMedium,
+  TextColor,
+  TextLight,
+  TextMeta,
+  TextPara,
+} from "../shared/text";
+
+const i18 = i18n.settings;
 
 export function SettingsScreen() {
-  const [account] = useAccount();
-  const goHome = useExitToHome();
+  const account = useAccount();
 
   const [showDetails, setShowDetails] = useState(false);
 
@@ -42,19 +61,22 @@ export function SettingsScreen() {
   return (
     <View style={styles.pageWrap}>
       <View style={ss.container.padH16}>
-        <ScreenHeader title="Settings" onBack={goHome} />
+        <ScreenHeader title={i18n.settings.screenHeader()} />
       </View>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         <Spacer h={16} />
         <AccountSection account={account} />
         <Spacer h={32} />
         <DevicesSection account={account} />
-        <Spacer h={8} />
         <TextButton
-          title={showDetails ? "Hide details" : "Show details"}
+          title={
+            showDetails
+              ? i18n.settings.hideDetails()
+              : i18n.settings.showDetails()
+          }
           onPress={() => setShowDetails(!showDetails)}
         />
-        <Spacer h={8} />
+        <Spacer h={16} />
         {showDetails && <DetailsSection account={account} />}
       </ScrollView>
     </View>
@@ -70,48 +92,100 @@ function AccountSection({ account }: { account: Account }) {
     Linking.openURL(url);
   }, [account]);
 
+  const dispatcher = useContext(DispatcherContext);
+  const connectFarc = () => dispatcher.dispatch({ name: "connectFarcaster" });
+
   return (
     <View style={styles.sectionWrap}>
-      <AccountHero account={account} />
+      <AccountHeader account={account} />
       <Spacer h={16} />
+      {account.linkedAccounts.length === 0 && (
+        <>
+          <ButtonMed
+            type="primary"
+            title={i18.account.connectFarcaster()}
+            onPress={connectFarc}
+          />
+          <Spacer h={16} />
+        </>
+      )}
       <ButtonMed
         type="subtle"
-        title="View account on explorer"
+        title={i18.account.viewAccountOnExplorer()}
         onPress={linkToExplorer}
       />
     </View>
   );
 }
 
-function AccountHero({ account }: { account: Account }) {
+export function AccountHeader({
+  account,
+  noLinkedAccounts,
+}: {
+  account: Account;
+  noLinkedAccounts?: boolean;
+}) {
   const daimoChain = daimoChainFromId(account.homeChainId);
   const { chainConfig } = env(daimoChain);
   const tokenSymbol = chainConfig.tokenSymbol;
   const l2Name = chainConfig.chainL2.name;
+  const isTestnet = chainConfig.chainL2.testnet;
 
   const eAcc = toEAccount(account);
 
   return (
     <View style={styles.accountHero}>
-      <AccountBubble eAcc={eAcc} size={64} />
+      <ContactBubble contact={{ type: "eAcc", ...eAcc }} size={64} />
       <View>
         <AccountCopyLinkButton eAcc={eAcc} size="h3" />
+        <Spacer h={2} />
         <View style={{ flexDirection: "row", alignItems: "baseline" }}>
-          <TextH3 color={color.gray3}>
-            {tokenSymbol} · {l2Name}{" "}
-            {chainConfig.chainL2.testnet && <Badge>TESTNET</Badge>}
-          </TextH3>
+          <TextBodyMedium color={color.gray3}>
+            {tokenSymbol} ·{" "}
+            {isTestnet ? (
+              <TextColor color={color.success}>{l2Name}</TextColor>
+            ) : (
+              l2Name
+            )}
+          </TextBodyMedium>
         </View>
+        {!noLinkedAccounts && (
+          <LinkedAccountsRow linkedAccounts={account.linkedAccounts} />
+        )}
       </View>
     </View>
   );
 }
 
+function LinkedAccountsRow({
+  linkedAccounts,
+}: {
+  linkedAccounts: Account["linkedAccounts"];
+}) {
+  const dispatcher = useContext(DispatcherContext);
+  const connectFarc = () => dispatcher.dispatch({ name: "connectFarcaster" });
+
+  if (linkedAccounts.length === 0) {
+    return (
+      <BadgeButton
+        title={i18.account.noSocialsConnected()}
+        onPress={connectFarc}
+      />
+    );
+  }
+
+  // Generalize once needed
+  const fcAccount = linkedAccounts[0];
+  return <FarcasterButton fcAccount={fcAccount} onPress={connectFarc} />;
+}
+
 function DevicesSection({ account }: { account: Account }) {
   const nav = useNav();
+  const dispatcher = useContext(DispatcherContext);
   const addDevice = () => nav.navigate("SettingsTab", { screen: "AddDevice" });
-  const createBackup = () =>
-    nav.navigate("SettingsTab", { screen: "AddPasskey" });
+  const createBackup = () => {
+    dispatcher.dispatch({ name: "createBackup" });
+  };
 
   const sortKey: (k: KeyData) => number = (k) => {
     // Our own key always first
@@ -127,6 +201,7 @@ function DevicesSection({ account }: { account: Account }) {
         key={keyData.slot}
         keyData={keyData}
         isCurrentDevice={keyData.pubKey === account.enclavePubKey}
+        isOnlyDevice={account.accountKeys.length === 1}
         chain={daimoChainFromId(account.homeChainId)}
         pendingRemoval={
           account.pendingKeyRotation.find(
@@ -141,21 +216,71 @@ function DevicesSection({ account }: { account: Account }) {
       .filter((k) => k.rotationType === "add")
       .map((k) => <PendingDeviceRow key={k.slot} slot={k.slot} />);
   }, [account.pendingKeyRotation])();
+  const openHelpModal = () =>
+    dispatcher.dispatch({
+      name: "helpModal",
+      title: i18.devices.passkeys.title(),
+      content: (
+        <>
+          <TextPara>{i18.devices.passkeys.description.firstPara()}</TextPara>
+          <Spacer h={16} />
+          <TextPara>{i18.devices.passkeys.description.secondPara()}</TextPara>
+        </>
+      ),
+    });
 
   return (
     <View style={styles.sectionWrap}>
       <View style={styles.headerRow}>
-        <TextLight>My devices &amp; backups</TextLight>
+        <TextLight>{i18.devices.title()}</TextLight>
       </View>
       <Spacer h={8} />
       <View
         style={styles.listBody}
         children={currentKeyRows.concat(pendingDeviceRows)}
       />
-      <Spacer h={16} />
-      <ButtonMed type="primary" title="CREATE BACKUP" onPress={createBackup} />
-      <Spacer h={16} />
-      <ButtonMed type="subtle" title="ADD DEVICE" onPress={addDevice} />
+      <Spacer h={24} />
+      <DescriptiveClickableRow
+        title={i18.devices.createBackup.title()}
+        message={i18.devices.createBackup.msg()}
+        icon={<ClockIcon color={color.gray3} style={{ top: 7 }} />}
+        onPressHelp={openHelpModal}
+      />
+      <ButtonMed
+        type="subtle"
+        title={i18.devices.createBackup.button()}
+        onPress={createBackup}
+      />
+      <View style={styles.separator} />
+      <DescriptiveClickableRow
+        title={i18.devices.addDevice.title()}
+        message={i18.devices.addDevice.msg()}
+        icon={<PlusIcon color={color.gray3} style={{ top: 7 }} />}
+      />
+      <ButtonMed
+        type="subtle"
+        title={i18.devices.addDevice.button()}
+        onPress={addDevice}
+      />
+      <View style={styles.separator} />
+      <DescriptiveClickableRow
+        title={i18.devices.contactSupport.title()}
+        message={i18.devices.contactSupport.msg()}
+        icon={
+          <Icon
+            name="help-circle"
+            size={24}
+            color={color.gray3}
+            style={{ top: 7 }}
+          />
+        }
+      />
+      <ButtonMed
+        type="subtle"
+        title={i18.devices.contactSupport.button()}
+        onPress={openSupportTG}
+      />
+      <View style={styles.separator} />
     </View>
   );
 }
@@ -163,11 +288,13 @@ function DevicesSection({ account }: { account: Account }) {
 function DeviceRow({
   keyData,
   isCurrentDevice,
+  isOnlyDevice,
   chain,
   pendingRemoval,
 }: {
   keyData: KeyData;
   isCurrentDevice: boolean;
+  isOnlyDevice: boolean;
   chain: DaimoChain;
   pendingRemoval: boolean;
 }) {
@@ -186,8 +313,13 @@ function DeviceRow({
 
   const dispName = getSlotLabel(keyData.slot);
   const dispTime = pendingRemoval
-    ? "Pending"
-    : "Added " + timeAgo(addAtS, nowS, true);
+    ? i18.pending()
+    : i18.addedAgo(timeAgo(addAtS, i18NLocale, nowS, true));
+  const cta = (() => {
+    if (isCurrentDevice && isOnlyDevice) return i18.delete();
+    if (isCurrentDevice) return i18.logOut();
+    return i18.remove();
+  })();
   const textCol = pendingRemoval ? color.gray3 : color.midnight;
 
   return (
@@ -201,11 +333,19 @@ function DeviceRow({
           <View style={{ flexDirection: "row", alignItems: "baseline" }}>
             <TextBody color={textCol}>{dispName}</TextBody>
             {(isCurrentDevice || pendingRemoval) && <Spacer w={12} />}
-            {isCurrentDevice && !pendingRemoval && <Badge>THIS DEVICE</Badge>}
+            {isCurrentDevice && !pendingRemoval && (
+              <Badge color={color.grayMid}>{i18.devices.thisDevice()}</Badge>
+            )}
             {pendingRemoval && <PendingDot />}
           </View>
           <View style={styles.rowRight}>
-            <TextMeta color={color.gray3}>{dispTime}</TextMeta>
+            {!isCurrentDevice && (
+              <TextMeta color={color.gray3}>{dispTime}</TextMeta>
+            )}
+            {!isCurrentDevice && <Spacer w={16} />}
+            <TextMeta color={pendingRemoval ? color.gray3 : color.primary}>
+              {cta}
+            </TextMeta>
           </View>
         </View>
       </TouchableHighlight>
@@ -230,7 +370,7 @@ function PendingDeviceRow({ slot }: { slot: number }) {
             <PendingDot />
           </View>
           <View style={styles.rowRight}>
-            <TextMeta color={color.gray3}>Pending</TextMeta>
+            <TextMeta color={color.gray3}>{i18.pending()}</TextMeta>
           </View>
         </View>
       </TouchableHighlight>
@@ -239,22 +379,14 @@ function PendingDeviceRow({ slot }: { slot: number }) {
 }
 
 function DetailsSection({ account }: { account: Account }) {
-  const enableNotifications = async () => {
-    await Notifications.requestPermissionsAsync();
-    try {
-      getPushNotificationManager().savePushTokenForAccount();
-    } catch (e: any) {
-      console.error(e);
-      window.alert(e.message);
-    }
-  };
+  const { ask } = useNotificationsAccess();
 
   const [sendDebugLog, debugEnvSummary] = useSendDebugLog(account);
 
   return (
     <View style={styles.sectionWrap}>
       <View style={styles.headerRow}>
-        <TextLight>Device details</TextLight>
+        <TextLight>{i18.details.title()}</TextLight>
       </View>
       <Spacer h={4} />
       <View style={styles.kvList}>
@@ -262,16 +394,20 @@ function DetailsSection({ account }: { account: Account }) {
           <KV key={k} label={k} value={v} />
         ))}
       </View>
-      {!account.pushToken && <Spacer h={8} />}
+      <Spacer h={24} />
       {!account.pushToken && (
         <ButtonMed
           type="subtle"
-          title="Enable notifications"
-          onPress={enableNotifications}
+          title={i18.details.enableNotifications()}
+          onPress={ask}
         />
       )}
-      <Spacer h={16} />
-      <ButtonMed type="subtle" title="Send debug log" onPress={sendDebugLog} />
+      {!account.pushToken && <Spacer h={16} />}
+      <ButtonMed
+        type="subtle"
+        title={i18.details.sendDebugLog()}
+        onPress={sendDebugLog}
+      />
       <Spacer h={32} />
     </View>
   );
@@ -283,11 +419,10 @@ function KV({ label, value }: { label: string; value: string }) {
       <View style={styles.kvKey}>
         <TextMeta color={color.grayDark}>{label}</TextMeta>
       </View>
-      <TextMeta>{value}</TextMeta>
+      <TextMeta color={color.gray3}>{value}</TextMeta>
     </View>
   );
 }
-
 const styles = StyleSheet.create({
   pageWrap: {
     flex: 1,
@@ -300,7 +435,6 @@ const styles = StyleSheet.create({
   sectionWrap: {},
   accountHero: {
     flexDirection: "row",
-    alignItems: "center",
     gap: 16,
   },
   listBody: {
@@ -309,13 +443,17 @@ const styles = StyleSheet.create({
     borderColor: color.grayLight,
   },
   headerRow: {
-    paddingTop: 16,
     paddingBottom: 8,
     paddingHorizontal: 2,
   },
   rowBorder: {
     borderTopWidth: 1,
     borderColor: color.grayLight,
+  },
+  separator: {
+    borderTopWidth: 1,
+    borderColor: color.grayLight,
+    marginVertical: 24,
   },
   rowWrap: {
     marginHorizontal: -24,
@@ -328,10 +466,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   rowRight: {
-    flexDirection: "column",
-    alignItems: "flex-end",
-    justifyContent: "center",
-    gap: 2,
+    flexDirection: "row",
   },
   kvList: {
     flexDirection: "column",

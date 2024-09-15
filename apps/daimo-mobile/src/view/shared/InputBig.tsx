@@ -6,11 +6,12 @@ import {
   StyleSheet,
   TextInput,
   TouchableWithoutFeedback,
-  View,
   ViewStyle,
 } from "react-native";
+import Animated, { LinearTransition } from "react-native-reanimated";
 
 import { color, ss } from "./style";
+import { MAX_FONT_SIZE_MULTIPLIER } from "./text";
 
 export type OctName = typeof Octicons extends Icon<infer G, any> ? G : never;
 
@@ -57,10 +58,19 @@ export function InputBig({
   }, [ref]);
 
   return (
-    <TouchableWithoutFeedback onPress={focus} hitSlop={8}>
-      <View
+    <TouchableWithoutFeedback onPress={focus} hitSlop={8} accessible={false}>
+      <Animated.View
+        layout={LinearTransition}
         style={[isFocused ? styles.inputRowFocused : styles.inputRow, style]}
       >
+        {icon && (
+          <Animated.View
+            layout={LinearTransition.delay(10000)}
+            style={styles.inputIcon}
+          >
+            <Octicons name={icon} size={18} color={color.primary} />
+          </Animated.View>
+        )}
         <TextInput
           ref={ref}
           placeholder={placeholder}
@@ -70,20 +80,17 @@ export function InputBig({
           style={center ? styles.inputCentered : styles.input}
           multiline={Platform.OS === "android" && center}
           numberOfLines={1}
+          maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
           autoCapitalize="none"
           autoCorrect={false}
+          spellCheck={false}
           autoFocus={autoFocus}
           secureTextEntry={needsAndroidWorkaround}
           keyboardType={needsAndroidWorkaround ? "visible-password" : "default"}
           onFocus={onInputFocus}
           onBlur={onInputBlur}
         />
-        {icon && (
-          <View style={styles.inputIcon}>
-            <Octicons name={icon} size={18} color={color.primary} />
-          </View>
-        )}
-      </View>
+      </Animated.View>
     </TouchableWithoutFeedback>
   );
 }
@@ -104,8 +111,8 @@ const input = {
   position: "absolute",
   top: 0,
   bottom: 0,
-  left: 16,
-  right: 40,
+  left: 48,
+  right: 16,
   paddingTop: 0,
   paddingVertical: 0,
 } as const;
@@ -125,7 +132,7 @@ const styles = StyleSheet.create({
   inputIcon: {
     position: "absolute",
     top: 13,
-    right: 20,
+    left: 20,
     width: 16,
     alignContent: "center",
     justifyContent: "center",

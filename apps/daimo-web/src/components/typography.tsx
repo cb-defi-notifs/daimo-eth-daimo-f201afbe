@@ -17,7 +17,7 @@ export function TextH3Subtle({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function LinkBold({
+export function LinkSemiBold({
   href,
   target,
   children,
@@ -28,19 +28,51 @@ export function LinkBold({
 }) {
   return (
     <Link href={href} target={target}>
-      <TextBold>{children}</TextBold>
+      <TextSemiBold>{children}</TextSemiBold>
     </Link>
   );
 }
 
-export function TextBold({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm font-semibold text-midnight">{children}</p>;
+export function TextSemiBold({
+  children,
+  textColor,
+}: {
+  children: React.ReactNode;
+  textColor?: string;
+}) {
+  return (
+    <p
+      className={`text-[16px] tracking-[1px] leading-[20.8px] font-semibold ${
+        textColor || "text-white"
+      }`}
+    >
+      {children}
+    </p>
+  );
+}
+
+export function TextBold({
+  children,
+  textColor,
+}: {
+  children: React.ReactNode;
+  textColor?: string;
+}) {
+  return (
+    <p
+      className={`text-[16px] tracking-none leading-[20.8px] font-bold ${
+        textColor || "text-white"
+      }`}
+    >
+      {children}
+    </p>
+  );
 }
 
 export function TextError({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm font-semibold text-danger">{children}</p>;
+  return <p className="text-base font-semibold text-danger">{children}</p>;
 }
 
 export function TextLight({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm font-medium text-grayMid">{children}</p>;
+  return <p className="text-base font-medium text-grayMid">{children}</p>;
 }

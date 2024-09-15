@@ -1,13 +1,19 @@
-import BottomSheet, { BottomSheetBackdrop } from "@gorhom/bottom-sheet";
+import BottomSheet, {
+  BottomSheetBackdrop,
+  SCREEN_WIDTH,
+} from "@gorhom/bottom-sheet";
 import { BottomSheetDefaultBackdropProps } from "@gorhom/bottom-sheet/lib/typescript/components/bottomSheetBackdrop/types";
 import {
+  NativeStackNavigationOptions,
+  createNativeStackNavigator,
+} from "@react-navigation/native-stack";
+import {
   ReactNode,
+  createContext,
   forwardRef,
   useCallback,
-  useEffect,
-  useImperativeHandle,
+  useContext,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import { Dimensions, StyleSheet } from "react-native";
@@ -19,7 +25,20 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import ScrollPellet from "./ScrollPellet";
 import { color } from "./style";
+import { ParamListBottomSheet, useNav } from "../../common/nav";
 import useTabBarHeight from "../../common/useTabBarHeight";
+import {
+  HistoryOpBottomSheet,
+  SetBottomSheetDetailHeight,
+} from "../screen/history/HistoryOpBottomSheet";
+
+const BottomSheetStackNavigator =
+  createNativeStackNavigator<ParamListBottomSheet>();
+
+const noHeaders: NativeStackNavigationOptions = {
+  headerShown: false,
+  animation: "fade",
+};
 
 interface SwipeUpDownProps {
   itemMini: ReactNode;
@@ -34,6 +53,7 @@ const screenDimensions = Dimensions.get("window");
 
 export type SwipeUpDownRef = {
   collapse: () => void;
+  expand: () => void;
 };
 
 export const SwipeUpDown = forwardRef<SwipeUpDownRef, SwipeUpDownProps>(
@@ -43,76 +63,66 @@ export const SwipeUpDown = forwardRef<SwipeUpDownRef, SwipeUpDownProps>(
   ) => {
     const ins = useSafeAreaInsets();
     const tabBarHeight = useTabBarHeight();
-    const bottomRef = useRef<BottomSheet>(null);
 
-    const [posYMini, setPosYMini] = useState(swipeHeight);
-    const [posYFull, setPosYFull] = useState(
-      screenDimensions.height - ins.top - ins.bottom - tabBarHeight
-    );
+    const maxHeightOffset = screenDimensions.height - ins.top - ins.bottom;
+    const [detailHeight, setDetailHeight] = useState(0);
+    const snapPointCount = detailHeight > 0 ? 2 : 3;
 
-    useEffect(() => {
-      const maxHeightOffset = screenDimensions.height - ins.top - ins.bottom;
-      setPosYMini(swipeHeight);
-      setPosYFull(maxHeightOffset - tabBarHeight);
-    });
+    const snapPoints = useMemo(() => {
+      if (snapPointCount === 2) {
+        return [detailHeight, maxHeightOffset - tabBarHeight];
+      } else {
+        return [swipeHeight, 440, maxHeightOffset - tabBarHeight];
+      }
+    }, [maxHeightOffset, snapPointCount]);
 
     const [isMini, setIsMini] = useState(true);
 
-    const animatedIndex = useSharedValue(0);
-
-    useImperativeHandle(ref, () => ({
-      collapse() {
-        bottomRef.current?.collapse();
-      },
-    }));
+    const nav = useNav();
 
     const showFull = () => {
-      console.log(`[SWIPE] showFull ${posYFull}`);
       setIsMini(false);
       onShowFull?.();
     };
 
     const showMini = () => {
-      console.log(`[SWIPE] showMini ${posYMini}`);
+      // react-native-nav typescript types broken
+      (nav as any).navigate("BottomSheetList");
+
       setIsMini(true);
       onShowMini?.();
     };
-
-    const snapPoints = useMemo(
-      () => [posYMini, posYFull],
-      [posYMini, posYFull]
-    );
 
     const renderBackdrop = useCallback(
       (props: BottomSheetDefaultBackdropProps) => (
         <BottomSheetBackdrop
           {...props}
-          disappearsOnIndex={0}
-          appearsOnIndex={1}
+          disappearsOnIndex={snapPointCount - 3}
+          appearsOnIndex={snapPointCount - 2}
           pressBehavior="none" // Disable fully closing to swipeIndex -1
         />
       ),
-      []
+      [snapPointCount]
     );
 
     const handleSheetChanges = (snapIndex: number) => {
       console.log(`[SWIPE] snapIndex ${snapIndex}`);
-      if (snapIndex < 1) {
+      if (snapPointCount === 3 && snapIndex < 1) {
         showMini();
       } else {
         showFull();
       }
     };
 
+    const animatedIndex = useSharedValue(0);
     const itemMiniStyle = useAnimatedStyle(() => {
       return {
-        opacity: 1 - animatedIndex.value * 3,
+        opacity: 1 - animatedIndex.value,
       };
     });
 
     return (
       <BottomSheet
-        ref={bottomRef}
         index={0}
         snapPoints={snapPoints}
         handleComponent={ScrollPellet}
@@ -123,18 +133,76 @@ export const SwipeUpDown = forwardRef<SwipeUpDownRef, SwipeUpDownProps>(
         enablePanDownToClose={false}
         enableHandlePanningGesture={!disabled}
         enableContentPanningGesture={!disabled}
+        activeOffsetX={[-SCREEN_WIDTH, SCREEN_WIDTH]}
+        activeOffsetY={[-10, 10]}
+        animationConfigs={ANIMATION_CONFIG}
       >
-        <Animated.View
-          style={[styles.itemMiniWrapper, itemMiniStyle]}
-          pointerEvents={isMini ? "auto" : "none"}
-        >
-          {itemMini}
-        </Animated.View>
-        {itemFull}
+        <SetBottomSheetDetailHeight.Provider value={setDetailHeight}>
+          <SwipeContext.Provider
+            value={{ isMini, itemMiniStyle, itemMini, itemFull }}
+          >
+            <BottomSheetStackNavigator.Navigator
+              initialRouteName="BottomSheetList"
+              screenOptions={noHeaders}
+            >
+              <BottomSheetStackNavigator.Group>
+                <BottomSheetStackNavigator.Screen
+                  name="BottomSheetList"
+                  component={TransactionList}
+                />
+                <BottomSheetStackNavigator.Screen
+                  name="BottomSheetHistoryOp"
+                  component={HistoryOpBottomSheet}
+                />
+              </BottomSheetStackNavigator.Group>
+            </BottomSheetStackNavigator.Navigator>
+          </SwipeContext.Provider>
+        </SetBottomSheetDetailHeight.Provider>
       </BottomSheet>
     );
   }
 );
+
+type SwipeContextValue = {
+  itemMini: ReactNode;
+  itemFull: ReactNode;
+  isMini: boolean;
+  itemMiniStyle: { opacity: number };
+};
+
+const SwipeContext = createContext<SwipeContextValue | null>(null);
+
+function useSwipeContext() {
+  const ctx = useContext(SwipeContext);
+
+  if (!ctx) throw new Error("Must be used inside a SwipeContext");
+
+  return ctx;
+}
+
+// Fade animation between minified and full lists
+function TransactionList() {
+  const { itemMini, itemFull, isMini, itemMiniStyle } = useSwipeContext();
+
+  return (
+    <>
+      <Animated.View
+        style={[styles.itemMiniWrapper, itemMiniStyle]}
+        pointerEvents={isMini ? "auto" : "none"}
+      >
+        {itemMini}
+      </Animated.View>
+      {itemFull}
+    </>
+  );
+}
+
+const ANIMATION_CONFIG = {
+  stiffness: 160,
+  damping: 18,
+  mass: 1,
+  restDisplacement: 1,
+};
 
 const styles = StyleSheet.create({
   itemMiniWrapper: {

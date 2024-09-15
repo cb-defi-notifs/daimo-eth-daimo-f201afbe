@@ -1,10 +1,15 @@
-import { DaimoNonce, DaimoNonceMetadata } from "@daimo/userop";
-import { Pool } from "pg";
+import { assertNotNull, retryBackoff } from "@daimo/common";
+import { DaimoNonce } from "@daimo/userop";
+import { Kysely } from "kysely";
 import { Hex, bytesToHex, numberToHex } from "viem";
 
+import { ClogMatcher } from "./ClogMatcher";
+import { Indexer } from "./indexer";
+import { DB as IndexDB } from "../codegen/dbIndex";
 import { chainConfig } from "../env";
 
-interface UserOp {
+export interface UserOp {
+  blockNumber: bigint;
   transactionHash: Hex;
   logIndex: number;
   nonce: bigint;
@@ -14,11 +19,13 @@ interface UserOp {
 type OpCallback = (userOp: UserOp) => void;
 
 /* User operation indexer. Used to track fulfilled requests. */
-export class OpIndexer {
+export class OpIndexer extends Indexer {
   private txHashToSortedUserOps: Map<Hex, UserOp[]> = new Map();
-  private nonceMetadataToTxes: Map<Hex, Hex[]> = new Map();
-
   private callbacks: Map<Hex, OpCallback[]> = new Map();
+
+  constructor(private clogMatcher: ClogMatcher) {
+    super("OP");
+  }
 
   addCallback(hash: Hex, cb: OpCallback) {
     const cbs = this.callbacks.get(hash);
@@ -36,25 +43,37 @@ export class OpIndexer {
     this.callbacks.delete(userOp.hash);
   }
 
-  async load(pg: Pool, from: bigint, to: bigint) {
+  async load(kdb: Kysely<IndexDB>, from: number, to: number) {
     const startTime = Date.now();
-    const result = await pg.query(
-      `
-        select tx_hash, log_idx, op_nonce, op_hash
-        from erc4337_user_op
-        where block_num >= $1 and block_num <= $2 and chain_id = $3
-      `,
-      [from, to, chainConfig.chainL2.id]
+
+    const result = await retryBackoff(
+      `opIndexer-logs-query-${from}-${to}`,
+      () =>
+        kdb
+          .selectFrom("index.daimo_op")
+          .select(["block_num", "tx_hash", "log_idx", "op_nonce", "op_hash"])
+          .where((eb) => eb.between("block_num", "" + from, "" + to))
+          .where("chain_id", "=", "" + chainConfig.chainL2.id)
+          .execute()
     );
-    result.rows.forEach((row) => {
+    if (result.length === 0) return;
+
+    let elapsedMs = (Date.now() - startTime) | 0;
+    console.log(`[OP] loaded ${result.length} ops in ${elapsedMs}ms`);
+
+    if (this.updateLastProcessedCheckStale(from, to)) return;
+
+    const txHashes = new Set<Hex>();
+    result.forEach((row) => {
       const userOp: UserOp = {
-        transactionHash: bytesToHex(row.tx_hash, { size: 32 }),
-        logIndex: row.log_idx,
-        nonce: BigInt(row.op_nonce),
-        hash: bytesToHex(row.op_hash, { size: 32 }),
+        blockNumber: BigInt(row.block_num),
+        transactionHash: bytesToHex(assertNotNull(row.tx_hash), { size: 32 }),
+        logIndex: Number(assertNotNull(row.log_idx)),
+        nonce: BigInt(assertNotNull(row.op_nonce)),
+        hash: bytesToHex(assertNotNull(row.op_hash), { size: 32 }),
       };
       const curLogs = this.txHashToSortedUserOps.get(userOp.transactionHash);
-      const newLogs = curLogs ? [...curLogs, row] : [userOp];
+      const newLogs = curLogs ? [...curLogs, userOp] : [userOp];
       this.txHashToSortedUserOps.set(
         userOp.transactionHash,
         newLogs.sort((a, b) => a.logIndex - b.logIndex)
@@ -65,16 +84,27 @@ export class OpIndexer {
       )?.metadata.toHex();
       if (!nonceMetadata) return;
 
-      const curTxes = this.nonceMetadataToTxes.get(nonceMetadata);
-      const newTxes = curTxes
-        ? [...curTxes, userOp.transactionHash]
-        : [userOp.transactionHash];
-      this.nonceMetadataToTxes.set(nonceMetadata, newTxes);
       this.callback(userOp);
+      txHashes.add(userOp.transactionHash);
     });
-    console.log(
-      `[OP] loaded ${result.rows.length} ops in ${Date.now() - startTime}ms`
+
+    elapsedMs = (Date.now() - startTime) | 0;
+    console.log(`[OP] processed ${result.length} ops in ${elapsedMs}ms`);
+
+    this.clogMatcher.loadClogTransfers(
+      kdb,
+      from,
+      to,
+      chainConfig.chainL2.id,
+      txHashes
     );
+  }
+
+  /**
+   * Interpret an event log as having originated from a userop, find the userop.
+   */
+  fetchUserOpFromEventLog(log: { transactionHash: Hex; logIndex: number }) {
+    return this.fetchUserOpLog(log.transactionHash, log.logIndex);
   }
 
   /**
@@ -88,23 +118,5 @@ export class OpIndexer {
       }
     }
     return undefined;
-  }
-
-  /**
-   * Interpret a (txHash, queryLogIndex) as having originated from a Daimo Account userop and fetch the nonce metadata of it.
-   */
-  fetchNonceMetadata(txHash: Hex, queryLogIndex: number): Hex | undefined {
-    const log = this.fetchUserOpLog(txHash, queryLogIndex);
-    if (!log) return undefined;
-    return DaimoNonce.fromHex(
-      numberToHex(log.nonce, { size: 32 })
-    )?.metadata.toHex();
-  }
-
-  /**
-   * Fetch all transaction hashes that match the queried nonce metadata.
-   */
-  fetchTxHashes(nonceMetadata: DaimoNonceMetadata): Hex[] {
-    return this.nonceMetadataToTxes.get(nonceMetadata.toHex()) ?? [];
   }
 }

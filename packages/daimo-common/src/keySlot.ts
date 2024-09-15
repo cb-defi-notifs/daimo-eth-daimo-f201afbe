@@ -1,55 +1,62 @@
 import { assert } from "./assert";
+import { KeyData } from "./model";
 
 export enum SlotType {
   Phone = "Phone",
   Computer = "Computer",
   PasskeyBackup = "Passkey Backup",
-}
-
-const slotTypeToFirstSlot = {
-  [SlotType.Phone]: 0,
-  [SlotType.Computer]: 0x40,
-  [SlotType.PasskeyBackup]: 0x80,
-};
-
-// Top two bits of slot denote the type.
-function getSlotType(slot: number): SlotType | undefined {
-  if (slot > 255) return undefined;
-
-  const slotType = slot & 0xc0;
-
-  const isSlotType = (type: SlotType) =>
-    (slotType & slotTypeToFirstSlot[type]) === slotTypeToFirstSlot[type];
-
-  if (isSlotType(SlotType.PasskeyBackup)) return SlotType.PasskeyBackup;
-  else if (isSlotType(SlotType.Computer)) return SlotType.Computer;
-  else if (isSlotType(SlotType.Phone)) return SlotType.Phone;
-  else return undefined;
-}
-
-// diff is the index of key wrt first slot of its type
-// convert diff to a human readable string (A, B, C, ... Z, AA, AB, ...)
-function getSlotCharCode(diff: number): string {
-  const base = 26;
-  let result = "";
-  let n = diff + 1; // 1-indexed
-  while (n > 0) {
-    const rem = (n - 1) % base;
-    result = String.fromCharCode(65 + rem) + result;
-    n = Math.floor((n - 1) / base);
-  }
-  return result;
+  SecurityKeyBackup = "Security Key Backup",
+  SeedPhraseBackup = "Seed Phrase Backup",
 }
 
 // slots 0 - 63 are for mobile devices
 // slots 64 - 127 are for computer devices
-// slots 128 - 255 are for passkey backups
+// slots 128 - 160 are for passkey backups
+// slots 160 - 192 are for security key backups
+// slots 192 - 256 are for seed phrase backups
+const slotTypeToFirstSlot = {
+  [SlotType.Phone]: 0,
+  [SlotType.Computer]: 0x40,
+  [SlotType.PasskeyBackup]: 0x80,
+  [SlotType.SecurityKeyBackup]: 0xa0,
+  [SlotType.SeedPhraseBackup]: 0xc0,
+};
+
+// Top three bits of slot denote the type.
+export function getSlotType(slot: number): SlotType | undefined {
+  if (slot > 255) return undefined;
+
+  const slotFirstThreeBits = slot & 0xe0;
+  const isSlotType = (type: SlotType) =>
+    (slotFirstThreeBits & slotTypeToFirstSlot[type]) ===
+    slotTypeToFirstSlot[type];
+
+  // slot types ordered by their first slot, descending
+  const descSlotTypes = Object.values(SlotType).sort((a, b) => {
+    return slotTypeToFirstSlot[b] - slotTypeToFirstSlot[a];
+  });
+
+  // Pick the largest slot type that fits
+  for (const slotType of descSlotTypes) {
+    if (isSlotType(slotType)) return slotType;
+  }
+  return undefined;
+}
+
 export function getSlotLabel(slot: number): string {
   const slotType = getSlotType(slot);
   assert(slotType !== undefined, "Invalid slot");
 
-  const prefix = slotType + " ";
-  return prefix + getSlotCharCode(slot - slotTypeToFirstSlot[slotType]);
+  const index = slot - slotTypeToFirstSlot[slotType] + 1;
+  return index === 1 ? slotType : `${slotType} ${index}`;
+}
+
+export function findAccountUnusedSlot(
+  account: { accountKeys: KeyData[] },
+  type: SlotType
+): number {
+  const allUsedSlots = account.accountKeys.map((k) => k.slot);
+  return findUnusedSlot(allUsedSlots, type);
 }
 
 export function findUnusedSlot(allUsedSlots: number[], type: SlotType): number {

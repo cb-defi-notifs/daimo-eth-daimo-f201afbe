@@ -1,14 +1,14 @@
-<img alt="Screenshot" src="https://github.com/daimo-eth/daimo/assets/169280/637cd1be-b4b9-4bad-a4e0-df2ebf9216a8">
+<img alt="Screenshot" src="https://github.com/daimo-eth/daimo/assets/169280/3207b2bf-f93d-4c26-b56f-1545e4e7c182">
 
-### Daimo is a stablecoin wallet
+### Daimo is a universal cash app
 
-Single stablecoin, single rollup, payments only. Cross-chain transfers coming soon.
+Today, we run on USDC on Base. Cross-chain transfers and more coming soon.
 
 No seed phrases. Keys are generated in your phone's secure enclave and never
 leave. You can add multiple devices and create Passkey backups to secure your
 account. Under the hood, it's a ERC-4337 contract wallet.
 
-The mission is to make an excellent experience. Payments should be fast, secure, and permissionless.
+The mission is to make an excellent experience. Sound assets, secure cryptography, your coins in your control.
 
 <!-- THE FAQ BELOW APPEARS AUTOMATICALLY ON THE WEBSITE. EDIT WITH CARE. -->
 
@@ -55,11 +55,20 @@ The mission is to make an excellent experience. Payments should be fast, secure,
   Yes, Daimo is and will always be open-source under GPLv3. We're here to collaborate. We want to make self-custody fast, safe, and easy. <a target="_blank" href="https://github.com/daimo-eth/daimo">See more on our Github.</a>
   </details>
 
-### Audits
+### Security
 
-- [Veridise audit 2023 Oct: Daimo](./audits/2023-10-veridise-daimo.pdf)
-- [Veridise audit 2023 Oct: P-256 verifier](./audits/2023-10-veridise-p256.pdf)
+#### Audits
+
+Past audits of the Daimo codebase can be found in the `audits` folder:
+
+- **Coming soon: OpenZeppelin audit 2024 Aug**
 - [Veridise audit 2023 Nov: WebAuthn verifier](./audits/2023-11-veridise-webauthn.pdf)
+- [Veridise audit 2023 Oct: P-256 verifier](./audits/2023-10-veridise-p256.pdf)
+- [Veridise audit 2023 Oct: Daimo](./audits/2023-10-veridise-daimo.pdf)
+
+#### Bug Bounty Program
+
+Daimo hosts a bug bounty program on [Immunefi](https://immunefi.com/bounty/daimo/). Learn more on [SECURITY.md](./SECURITY.md).
 
 ### Development
 
@@ -94,7 +103,7 @@ git clone git@github.com:daimo-eth/daimo --recurse-submodules
 Build the app.
 
 ```sh
-node --version # ensure you have node 20+
+node --version # ensure you have node 21+
 npm i
 npm run build
 ```
@@ -103,17 +112,16 @@ Run the iPhone Simulator in XCode. (If you're not on a Mac, see the
 Android quick start below.) Get the latest simulator build from Expo; message us
 if you need access. Drag-drop the build into the simulator to install.
 
-Set the following variables to use the remote, hosted API.
+Copy the example `.env` file to use the remote, hosted API.
 
 ```sh
-export DAIMO_APP_API_URL_TESTNET="https://daimo-api-testnet.onrender.com"
-export DAIMO_APP_API_URL_MAINNET="https://daimo-api-prod.onrender.com"
+cd apps/daimo-mobile
+cp .env.example .env
 ```
 
 Finally, run the app in the simulator.
 
 ```sh
-cd apps/daimo-mobile
 npm run dev
 ```
 
@@ -174,11 +182,9 @@ By default:
 
 You'll need to either use the hosted Daimo API or run one locally.
 
-To run the API locally, fill in the `DAIMO_API_...` and `NEXT_PUBLIC_...`
-environment variables. Message us if you need help.
+To run the API locally, fill in `.env`. Message us if you need help.
 
-You can run Postgres in the background locally using
-`initdb daimo && pg_ctl -D daimo start`. To stop, use `pg_ctl -D daimo stop`.
+You can run Postgres in the background locally using the Mac Postgres app.
 
 Once you're running the API locally, you can run the full stack self-contained.
 
@@ -192,4 +198,57 @@ cd apps/daimo-web && npm run dev
 ```
 
 </details>
+
+<details>
+<summary><strong>Dev quickstart: Maestro</strong></summary>
+
+`daimo-mobile` runs end to end tests with [Maestro](https://maestro.mobile.dev).
+
+To write or run a test locally, first obtain a Expo build labelled with profile `maestro` [here](https://expo.dev/accounts/daimo/projects/daimo/builds).
+
+Then, with Maestro installed, you can simply run `maestro test <test file name>` to run the test. Example: `maestro test .maestro/onboardAndRemove.yaml`.
+
+In the cloud, these tests are run on the master branch using the `maestro-ci` workflow in [Maestro cloud](https://console.mobile.dev).
+
+</details>
+</details>
+
+<details>
+<summary><strong>DB diagnostics</strong></summary>
+
+Indexer caught up?
+
+```sql
+SELECT * FROM index.daimo_index;
+```
+
+Largest Postgres DB tables, disk usage:
+
+```sql
+SELECT
+  table_schema,
+  table_name,
+  pg_size_pretty(pg_total_relation_size(c.oid)) AS total_size
+FROM
+  information_schema.tables t
+JOIN
+  pg_class c ON c.relname = t.table_name
+WHERE table_type = 'BASE TABLE'
+ORDER BY pg_total_relation_size(c.oid) DESC
+LIMIT 20;
+```
+
+Largest tables, approximate row count:
+
+```sql
+SELECT
+  (SELECT nspname FROM pg_namespace WHERE oid=relnamespace) as r_schema,
+  relname as r_name,
+  reltuples as approx_num_rows,
+  (relpages * 8) / 1024 as approx_disk_mb
+FROM pg_class
+WHERE reltuples > 0
+ORDER BY reltuples DESC;
+```
+
 </details>

@@ -2,8 +2,8 @@
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "editor.codeActionsOnSave": {
-    "source.organizeImports": false,
-    "source.fixAll": true
+    "source.organizeImports": "never",
+    "source.fixAll": "explicit"
   },
   "editor.rulers": [80],
   "typescript.tsdk": "node_modules/typescript/lib",
@@ -20,5 +20,6 @@
     "editor.defaultFormatter": "esafirm.kotlin-formatter"
   },
   "coverage-gutters.coverageBaseDir": "packages/contract",
-  "coverage-gutters.coverageFileNames": ["lcov.info"]
+  "coverage-gutters.coverageFileNames": ["lcov.info"],
+  "solidity.compileUsingRemoteVersion": "v0.8.26+commit.8a97fa7a"
 }

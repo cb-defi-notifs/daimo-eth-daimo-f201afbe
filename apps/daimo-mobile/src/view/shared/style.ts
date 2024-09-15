@@ -2,13 +2,13 @@ import { Platform, StyleSheet, TextStyle } from "react-native";
 
 /** Match daimo-web tailwind config. Same name = refers to the same color. */
 export const color = {
-  primary: "#007aff",
-  primaryBgLight: "#aaccff",
+  primary: "#13915F",
+  primaryBgLight: "#CCF3D7",
   danger: "#f35369",
   warningLight: "#ffeeb3",
   yellow: "#FFDC62",
-  success: "#0CA01B",
-  successDark: "#009900",
+  success: "#14B174",
+  successDark: "#13915F",
   white: "#ffffff",
   ivoryLight: "#f9f9f9",
   ivoryDark: "#f2f2f2",
@@ -17,6 +17,8 @@ export const color = {
   grayMid: "#717171", // TODO gray4
   grayDark: "#444", // TODO gray5
   midnight: "#262626", // TODO "black" = 111111
+  link: "#027AFE",
+  lightBlue: "#A3D3FF",
 };
 
 const textBase: TextStyle = {
@@ -50,10 +52,24 @@ export const ss = {
       backgroundColor: color.white,
       paddingHorizontal: 16,
     },
+    screenWithoutPadding: {
+      flex: 1,
+      flexDirection: "column",
+      alignItems: "stretch",
+      backgroundColor: color.white,
+    },
     center: {
       flex: 1,
       alignItems: "center",
       justifyContent: "center",
+    },
+    flexGrow: {
+      flexGrow: 1,
+    },
+    topBottom: {
+      flexGrow: 1,
+      flexDirection: "column",
+      justifyContent: "space-between",
     },
     padH8: {
       paddingHorizontal: 8,
@@ -61,12 +77,22 @@ export const ss = {
     padH16: {
       paddingHorizontal: 16,
     },
+    padH24: {
+      paddingHorizontal: 24,
+    },
     marginHNeg16: {
       marginHorizontal: -16,
     },
     debug: {
       borderWidth: 1,
       borderColor: "#f00",
+    },
+    shadow: {
+      // iOS
+      shadowOffset: { height: 2, width: -1 },
+      shadowOpacity: 0.05,
+      // Android
+      elevation: 1,
     },
   }),
   text: StyleSheet.create({
@@ -90,11 +116,28 @@ export const ss = {
       fontSize: 16,
       fontWeight: "600",
     },
+    bodyCaps: {
+      ...textBase,
+      fontSize: 16,
+      fontWeight: "600",
+      letterSpacing: 0.6,
+    },
+    bodyMedium: {
+      ...textBase,
+      fontSize: 16,
+      fontWeight: "500",
+    },
     para: {
       ...textBase,
       fontSize: 16,
       fontWeight: "500",
       lineHeight: 28,
+    },
+    btnCaps: {
+      ...textBase,
+      fontSize: 14,
+      fontWeight: "700",
+      letterSpacing: 0.8,
     },
     metadata: {
       ...textBase,
@@ -106,6 +149,10 @@ export const ss = {
       fontSize: 13,
       fontWeight: "600",
       color: color.gray3,
+    },
+    dropdown: {
+      ...textBase,
+      fontSize: 17,
     },
     error: {
       ...textBase,
@@ -123,6 +170,16 @@ export const ss = {
     },
     mono: {
       fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }),
+    },
+    emphasizedSmallText: {
+      ...textBase,
+      fontWeight: "600",
+      fontSize: 12,
+    },
+    link: {
+      color: color.link,
+      fontSize: 16,
+      fontWeight: "600",
     },
   }),
 };

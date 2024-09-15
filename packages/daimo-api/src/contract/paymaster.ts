@@ -1,27 +1,11 @@
-import {
-  ChainGasConstants,
-  EAccount,
-  UserOpHex,
-  assert,
-  assertNotNull,
-} from "@daimo/common";
-import { daimoChainFromId, daimoPaymasterAddress } from "@daimo/contract";
-import {
-  Hex,
-  concatHex,
-  hexToBigInt,
-  hexToBytes,
-  keccak256,
-  numberToHex,
-  toHex,
-} from "viem";
-import { sign } from "viem/accounts";
+import { ChainGasConstants, EAccount, retryBackoff } from "@daimo/common";
+import { daimoPaymasterV2Address } from "@daimo/contract";
+import { hexToBigInt } from "viem";
 
 import { DB } from "../db/db";
 import { chainConfig } from "../env";
 import { BundlerClient } from "../network/bundlerClient";
-import { ViemClient, getEOA } from "../network/viemClient";
-import { retryBackoff } from "../utils/retryBackoff";
+import { ViemClient } from "../network/viemClient";
 
 interface GasPrices {
   /// L2 fee
@@ -54,7 +38,9 @@ export class Paymaster {
 
   addToWhitelist(name: string) {
     // Run in background, don't await
-    this.db.insertPaymasterWhiteslist(name);
+    retryBackoff(`insertPaymasterWhiteslist`, () =>
+      this.db.insertPaymasterWhiteslist(name)
+    );
   }
 
   // Since our various gas limits corresponding to the userop are nearly fixed,
@@ -105,16 +91,12 @@ export class Paymaster {
       "get-user-operation-gas-price-params",
       () => this.bundlerClient.getUserOperationGasPriceParams()
     );
-    const estimatedPreVerificationGas = await retryBackoff(
-      "estimate-preverification-gas",
-      () => this.bundlerClient.estimatePreVerificationGas(getDummyOp())
-    );
 
     const maxFeePerGas = hexToBigInt(gasPriceParams.maxFeePerGas);
     const maxPriorityFeePerGas = hexToBigInt(
       gasPriceParams.maxPriorityFeePerGas
     );
-    const preVerificationGas = estimatedPreVerificationGas;
+    const preVerificationGas = calcPreVerificationGas();
 
     // this.estimatedFee = this.estimatePimlicoFee();
 
@@ -136,10 +118,9 @@ export class Paymaster {
     // Sign paymaster for any valid Daimo account, excluding name blacklist.
     // Everyone else gets the Pimlico USDC paymaster.
     const isSponsored =
-      sender.name != null &&
-      (await this.db.checkPaymasterWhitelist(sender.name));
+      chainConfig.chainL2.testnet || (await this.shouldSponsor(sender.name));
     const paymasterAndData = isSponsored
-      ? await getPaymasterWithSignature(sender)
+      ? daimoPaymasterV2Address
       : chainConfig.pimlicoPaymasterAddress;
 
     // TODO: estimate real Pimlico fee for non-sponsored ops.
@@ -157,77 +138,15 @@ export class Paymaster {
       preVerificationGas: gas.preVerificationGas.toString(),
     };
   }
+
+  async shouldSponsor(name?: string): Promise<boolean> {
+    if (name == null) return false;
+    return await retryBackoff(`checkPaymasterWhitelist`, () =>
+      this.db.checkPaymasterWhitelist(name!)
+    );
+  }
 }
 
-const signerPrivateKey = assertNotNull(
-  process.env.DAIMO_PAYMASTER_SIGNER_PRIVATE_KEY,
-  "Missing DAIMO_PAYMASTER_SIGNER_PRIVATE_KEY"
-) as Hex;
-const signer = getEOA(signerPrivateKey);
-
-async function getPaymasterWithSignature(sender: EAccount): Promise<Hex> {
-  const validUntil = (Date.now() / 1000 + 5 * 60) | 0; // 5 minute validity
-  const validUntilHex = numberToHex(validUntil, { size: 6 });
-  const ticketHex = concatHex([sender.addr, validUntilHex]);
-  assert(hexToBytes(ticketHex).length === 26, "paymaster: invalid ticket len");
-  const ticketHash = keccak256(ticketHex);
-  console.log(
-    `[PAYMASTER] sign ${ticketHex} ${ticketHash} with ${signer.address}`
-  );
-
-  const sig = await sign({ hash: ticketHash, privateKey: signerPrivateKey });
-  const sigHex = concatHex([
-    toHex(sig.v, { size: 1 }),
-    toHex(hexToBigInt(sig.r), { size: 32 }),
-    toHex(hexToBigInt(sig.s), { size: 32 }),
-  ]);
-  assert(sigHex.length === 65 * 2 + 2, "paymaster: invalid sig length");
-
-  // Experimentally try the new MetaPaymaster-sponsored Daimo paymaster.
-  const paymasterAddr =
-    chainConfig.chainL2.id === 8453
-      ? daimoPaymasterAddress
-      : "0x6f0F82fAFac7B5D8C269B02d408F094bAC6CF877";
-
-  const ret = concatHex([paymasterAddr, sigHex, validUntilHex]);
-  assert(ret.length === 91 * 2 + 2, "paymaster: invalid ret length");
-  return ret;
+function calcPreVerificationGas() {
+  return 1_000_000n; // TODO
 }
-
-function getDummyOp(): UserOpHex {
-  return dummyAddDeviceOps[daimoChainFromId(chainConfig.chainL2.id)];
-}
-
-// Arbitrary add device ops used for gas estimation via Pimlico.
-const dummyAddDeviceOps = {
-  base: {
-    sender: "0xFBfa6A0D1F44b60d7CCA4b95d5a2CfB15246DB0D",
-    nonce: "0xd642bab777d7280fcaa3d46d12f2294c0000000000000000",
-    initCode: "0x",
-    callData:
-      "0x34fcd5be000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa9604500000000000000000000000000000000000000000000000000000000000f424000000000000000000000000000000000000000000000000000000000",
-    callGasLimit: "0x493e0",
-    verificationGasLimit: "0xaae60",
-    preVerificationGas: "0xf4240",
-    maxFeePerGas: "0xa76aa9",
-    maxPriorityFeePerGas: "0xa76aa9",
-    paymasterAndData: "0x939263eafe57038a072cb4edd6b25dd81a8a6c56",
-    signature:
-      "0x010000655d836301000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000012000000000000000000000000000000000000000000000000000000000000000170000000000000000000000000000000000000000000000000000000000000001ae451cfd35ad2d0b611f9c6a6b782e9dc102c8b6864b4d159ff9bf6f6ba1dbd0698430a4f67db38a250ad441a0dbf639b850d1697c4b269c0e4337436d51c313000000000000000000000000000000000000000000000000000000000000002500000000000000000000000000000000000000000000000000000000000000000500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005a7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a22415141415a56324459397a6977776f6e4473445859703875356f4638546b4653466f383971744e5a3463315166304d42692d7073227d000000000000",
-  },
-  baseGoerli: {
-    sender: "0xCaa88b53CDDF460Abf96D9C57F3714fB25A0738c",
-    nonce: "0x4000000000000005c6fba6fbe829ece85acfcfe949005b00000000000000000",
-    initCode: "0x",
-    callData:
-      "0x34fcd5be000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000caa88b53cddf460abf96d9c57f3714fb25a0738c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000064b3033ef2000000000000000000000000000000000000000000000000000000000000000165a2fa44daad46eab0278703edb6c4dcf5e30b8a9aec09fdc71a56f52aa392e44a7a9e4604aa36898209997288e902ac544a555e4b5e0a9efef2b59233f3f43700000000000000000000000000000000000000000000000000000000",
-    callGasLimit: "0x493e0",
-    verificationGasLimit: "0xaae60",
-    preVerificationGas: "0x5208",
-    maxFeePerGas: "0x5f5e132",
-    maxPriorityFeePerGas: "0x5f5e100",
-    paymasterAndData: "0x99d720cd5a04c16dc5377638e3f6d609c895714f",
-    signature:
-      "0x0100000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000012000000000000000000000000000000000000000000000000000000000000000170000000000000000000000000000000000000000000000000000000000000001a9650c1d0cb868523031addedbe9b9dd1c8ddf0b5c7baf2ff98db6d84e540bf67d7cda1288328f086a71afd22edd1fcde6aad5f6ee63e937f5026aac51928eea000000000000000000000000000000000000000000000000000000000000002500000000000000000000000000000000000000000000000000000000000000000500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006f7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2241514141414141414145314b5242393839756a5173752d56736a57394f3038737a4f304f6165662d68615f682d51585445746251222c226f726967696e223a226461696d6f2e78797a227d0000000000000000000000000000000000",
-  },
-} as const;

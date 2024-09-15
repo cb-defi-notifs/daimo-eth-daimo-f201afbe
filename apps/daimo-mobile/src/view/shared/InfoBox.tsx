@@ -1,4 +1,5 @@
 import Octicons from "@expo/vector-icons/Octicons";
+import { ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 
 import { OctName } from "./InputBig";
@@ -10,10 +11,14 @@ export function InfoBox({
   subtitle,
   icon,
 }: {
-  title: string;
-  subtitle: string;
+  title: ReactNode;
+  subtitle?: ReactNode;
   icon?: OctName;
 }) {
+  if (typeof title === "string") {
+    title = <TextBody>{title}</TextBody>;
+  }
+
   return (
     <View style={styles.bubble}>
       <View style={styles.bubbleIcon}>
@@ -21,8 +26,8 @@ export function InfoBox({
         {icon && <Octicons name={icon} size={16} color={color.white} />}
       </View>
       <View style={styles.bubbleText}>
-        <TextBody>{title}</TextBody>
-        <TextBody color={color.grayDark}>{subtitle}</TextBody>
+        {title}
+        {subtitle && <TextBody color={color.grayDark}>{subtitle}</TextBody>}
       </View>
     </View>
   );
@@ -34,7 +39,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     flexDirection: "row",
     alignItems: "center",
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     gap: 16,
     marginHorizontal: 8,
   },
@@ -43,13 +49,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
-    width: 32,
-    height: 32,
-    borderRadius: 32,
+    width: 24,
+    height: 24,
+    borderRadius: 24,
   },
   bubbleText: {
     flex: 1,
-    flexDirection: "row",
-    flexWrap: "wrap",
+    flexDirection: "column",
   },
 });

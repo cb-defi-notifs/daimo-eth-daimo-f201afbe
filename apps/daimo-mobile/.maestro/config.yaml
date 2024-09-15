@@ -1,0 +1,8 @@
+# Maestro Cloud configuration
+baselineBranch: master
+notifications:
+  email:
+    enabled: true
+    onSuccess: true
+    recipients:
+      - alerts-aaaak7okwrieedyz372hhd57ue@daimo-workspace.slack.com

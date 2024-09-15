@@ -2,28 +2,26 @@ import type { AppRouter } from "@daimo/api";
 import { assert } from "@daimo/common";
 import { DaimoChain } from "@daimo/contract";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
+import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
 import { nativeApplicationVersion, nativeBuildVersion } from "expo-application";
 import { ReactNode, createContext } from "react";
 import { Platform } from "react-native";
 
+import { getEnvMobile } from "../env";
 import { updateNetworkStateOnline } from "../sync/networkState";
 
 const apiUrlT =
-  process.env.DAIMO_APP_API_URL_TESTNET || process.env.DAIMO_APP_API_URL;
-const apiUrlTestnetWithChain = `${apiUrlT}/chain/84531`;
+  getEnvMobile().DAIMO_APP_API_URL_TESTNET || getEnvMobile().DAIMO_APP_API_URL;
+const apiUrlTestnetWithChain = `${apiUrlT}/chain/84532`;
 const apiUrlM =
-  process.env.DAIMO_APP_API_URL_MAINNET || process.env.DAIMO_APP_API_URL;
+  getEnvMobile().DAIMO_APP_API_URL_MAINNET || getEnvMobile().DAIMO_APP_API_URL;
 const apiUrlMainnetWithChain = `${apiUrlM}/chain/8453`;
 
 function createRpcHook() {
   const reactQueryContext = createContext<QueryClient | undefined>(undefined);
   return {
-    trpc: createTRPCReact<AppRouter>({
-      context: createContext(null),
-      reactQueryContext,
-    }),
+    trpc: createTRPCReact<AppRouter>({ context: reactQueryContext }),
     reactQueryContext,
     queryClient: new QueryClient({
       defaultOptions: {
@@ -51,7 +49,7 @@ function chooseChain<T>({
   testnet: T;
 }): T {
   assert(
-    ["base", "baseGoerli"].includes(daimoChain),
+    ["base", "baseSepolia"].includes(daimoChain),
     `Unsupported chain: ${daimoChain}`
   );
   if (daimoChain === "base") return mainnet;
@@ -89,9 +87,11 @@ function getOpts(daimoChain: DaimoChain) {
             if (func === "deployWallet") return 60_000; // 1 minute
             else return 10_000; // default: 10 seconds
           })();
-          console.log(`[TRPC] fetching ${url}, timout ${timeout}ms`, init);
+          console.log(`[TRPC] fetching ${url}, timeout ${timeout}ms`, init);
+          let promise: Promise<Response> | undefined;
           const controller = new AbortController();
           const timeoutID = setTimeout(() => {
+            if (promise == null) return; // Completed
             console.log(`[TRPC] timeout after ${timeout}ms: ${input}`);
             controller.abort();
           }, timeout);
@@ -99,11 +99,13 @@ function getOpts(daimoChain: DaimoChain) {
 
           // Fetch
           const startMs = performance.now();
-          const ret = await fetch(input, init).then((res) => {
+          promise = fetch(input, init).then((res) => {
             // When a request succeeds, mark us online immediately.
             if (res.ok) updateNetworkStateOnline();
             return res;
           });
+          const ret = await promise;
+          promise = undefined;
           clearTimeout(timeoutID);
 
           // Log
@@ -119,15 +121,15 @@ function getOpts(daimoChain: DaimoChain) {
   };
 }
 
-const rpcHookMainnetClient = rpcHookMainnet.trpc.createClient(getOpts("base"));
-const rpcHookTestnetClient = rpcHookTestnet.trpc.createClient(
-  getOpts("baseGoerli")
-);
+const optsMainnet = getOpts("base");
+const optsTestnet = getOpts("baseSepolia");
+const rpcHookMainnetClient = rpcHookMainnet.trpc.createClient(optsMainnet);
+const rpcHookTestnetClient = rpcHookTestnet.trpc.createClient(optsTestnet);
 
 type RpcClient = typeof rpcHookMainnetClient | typeof rpcHookTestnetClient;
 
-const rpcFuncMainnet = createTRPCProxyClient<AppRouter>(getOpts("base"));
-const rpcFuncTestnet = createTRPCProxyClient<AppRouter>(getOpts("baseGoerli"));
+const rpcFuncMainnet = createTRPCClient<AppRouter>(optsMainnet);
+const rpcFuncTestnet = createTRPCClient<AppRouter>(optsTestnet);
 
 export function getRpcFunc(daimoChain: DaimoChain) {
   return chooseChain({
@@ -157,10 +159,7 @@ function ChainRpcProvider({
 }) {
   return (
     <rpcHook.trpc.Provider queryClient={rpcHook.queryClient} client={rpcClient}>
-      <QueryClientProvider
-        client={rpcHook.queryClient}
-        context={rpcHook.reactQueryContext}
-      >
+      <QueryClientProvider client={rpcHook.queryClient}>
         {children}
       </QueryClientProvider>
     </rpcHook.trpc.Provider>

@@ -2,74 +2,65 @@ import { AccountHistoryResult } from "@daimo/api";
 import {
   EAccount,
   OpStatus,
-  TransferOpEvent,
+  PendingOp,
+  TransferClog,
   amountToDollars,
   assert,
-  guessTimestampFromNum,
+  assertNotNull,
+  now,
 } from "@daimo/common";
-import { DaimoChain, daimoChainFromId } from "@daimo/contract";
+import { daimoChainFromId } from "@daimo/contract";
 import * as SplashScreen from "expo-splash-screen";
-import { Hex } from "viem";
 
 import { getNetworkState, updateNetworkState } from "./networkState";
-import { SEND_DEADLINE_SECS } from "../action/useSendAsync";
-import { env } from "../logic/env";
-import { Account, getAccountManager } from "../model/account";
+import { addLandlineTransfers } from "./syncLandline";
+import { i18NLocale } from "../i18n";
+import { getAccountManager } from "../logic/accountManager";
+import { SEND_DEADLINE_SECS } from "../logic/opSender";
+import { getRpcFunc } from "../logic/trpc";
+import { Account } from "../storage/account";
 
-// Sync strategy:
-// - On app load, load account from storage
-// - Then, sync from API
-// - After, sync from API:
-//   ...immediately on push notification
-//   ...frequently while there's a pending transaction
-//   ...occasionally otherwise
+/**
+ * Sync strategy:
+ * - On app load, load account from storage
+ * - Then, sync from API
+ * - After, sync from API:
+ * - ...immediately on push notification
+ * - ...frequently while there's a pending transaction
+ * - ...occasionally otherwise
+ */
 export function startSync() {
   console.log("[SYNC] APP LOAD, starting sync");
   maybeSync(true)
-    .then((success) => {
-      if (!success) {
-        updateNetworkState(() => {
-          // set fail to 3 because at 2 it would remove offline banner
-          // for one try even if sync failed
-          return { status: "offline", syncAttemptsFailed: 3 };
-        });
-      }
+    .then((status) => {
+      if (status !== "failed") return;
+      updateNetworkState(() => ({ status: "offline", syncAttemptsFailed: 1 }));
     })
-    .finally(() => {
-      // create small delay to let interface render becuase this callback
-      // run right after getting data so the interface still got to adapt
-      setTimeout(() => {
-        SplashScreen.hideAsync();
-      }, 300);
-    });
+    .finally(() => SplashScreen.hideAsync());
   setInterval(maybeSync, 1_000);
 }
 
 let lastSyncS = 0;
 let lastPushNotificationS = 0;
 
+/** Sync more frequently for a few seconds after each push notification. */
 export function syncAfterPushNotification() {
-  lastPushNotificationS = Date.now() / 1e3;
+  lastPushNotificationS = now();
 }
 
-function hasPendingOps(account: Account) {
-  return (
-    account.recentTransfers.find((t) => t.status === "pending") != null ||
-    account.pendingKeyRotation.length > 0
-  );
-}
+type SyncStatus = "success" | "failed" | "skipped" | "skipped";
 
-async function maybeSync(fromScratch?: boolean) {
+async function maybeSync(fromScratch?: boolean): Promise<SyncStatus> {
   const manager = getAccountManager();
-  if (manager.currentAccount == null) return;
-  const account = manager.currentAccount;
+  const account = manager.getAccount();
+  if (account == null) return "skipped";
 
   // Synced recently? Wait first.
-  const nowS = Date.now() / 1e3;
+  const nowS = now();
   let intervalS = 10;
 
-  // Sync faster for 1. pending ops, and 2. recently-failed sync
-  if (hasPendingOps(account)) {
+  // Sync faster for 1. pending ops or expired swaps, and 2. recently-failed sync
+  if (hasPendingOps(account) || hasCacheExpiredSwaps(account)) {
     intervalS = 1;
   }
 
@@ -86,29 +77,42 @@ async function maybeSync(fromScratch?: boolean) {
     );
   } else if (lastSyncS + intervalS > nowS) {
     console.log(`[SYNC] skipping sync, attempted sync recently`);
-    return false;
+    return "skipped";
   } else {
     return await resync(`interval ${intervalS}s`);
   }
 }
 
+function hasPendingOps(account: Account) {
+  return (
+    account.recentTransfers.find((t) => t.status === "pending") != null ||
+    account.pendingKeyRotation.length > 0
+  );
+}
+
+function hasCacheExpiredSwaps(account: Account) {
+  return account.proposedSwaps.some((s) => s.cacheUntil < now());
+}
+
 /** Gets latest balance & history for this account, in the background. */
-export async function resync(reason: string, fromScratch?: boolean) {
+export async function resync(
+  reason: string,
+  fromScratch?: boolean
+): Promise<SyncStatus> {
   const manager = getAccountManager();
-  const accOld = manager.currentAccount;
+  const accOld = manager.getAccount();
   assert(!!accOld, `no account, skipping sync: ${reason}`);
 
   console.log(`[SYNC] RESYNC ${accOld.name}, ${reason}`);
-  lastSyncS = Date.now() / 1e3;
+  lastSyncS = now();
 
   try {
     const res = await fetchSync(accOld, fromScratch);
-    assert(!!manager.currentAccount, `account deleted during sync`);
-    const accNew = applySync(manager.currentAccount, res);
-    console.log(`[SYNC] SUCCEEDED ${accNew.name}`);
-    manager.setCurrentAccount(accNew);
+    assertNotNull(manager.getAccount(), "deleted during sync");
+    manager.transform((a) => applySync(a, res, !!fromScratch));
+    console.log(`[SYNC] SUCCEEDED ${accOld.name}`);
     // We are automatically marked online when any RPC req succeeds
-    return true;
+    return "success";
   } catch (e) {
     console.error(`[SYNC] FAILED ${accOld.name}`, e);
     // Mark offline
@@ -119,14 +123,14 @@ export async function resync(reason: string, fromScratch?: boolean) {
         status: syncAttemptsFailed > 3 ? "offline" : "online",
       };
     });
-    return false;
+    return "failed";
   }
 }
 
 /** Hydrate a newly created account to fill in properties from server */
 export async function hydrateAccount(account: Account): Promise<Account> {
   const res = await fetchSync(account, true);
-  return applySync(account, res);
+  return applySync(account, res, false);
 }
 
 /** Loads all account history since the last finalized block as of the previous sync.
@@ -138,10 +142,12 @@ async function fetchSync(
   const sinceBlockNum = fromScratch ? 0 : account.lastFinalizedBlock;
 
   const daimoChain = daimoChainFromId(account.homeChainId);
-  const rpcFunc = env(daimoChain).rpcFunc;
+  const rpcFunc = getRpcFunc(daimoChain);
   const result = await rpcFunc.getAccountHistory.query({
     address: account.address,
+    inviteCode: account.inviteLinkStatus?.link.code,
     sinceBlockNum,
+    lang: i18NLocale.languageCode || undefined,
   });
   const syncSummary = {
     address: account.address,
@@ -157,14 +163,21 @@ async function fetchSync(
     chainGasConstants: result.chainGasConstants,
     recommendedExchanges: result.recommendedExchanges,
     suggestedActions: result.suggestedActions,
+    profilePicture: result.profilePicture,
+    inviteLinkStatus: result.inviteLinkStatus,
+    numInvitees: result.invitees.length,
+    notificationRequestStatuses: result.notificationRequestStatuses,
+    numExchangeRates: (result.exchangeRates || []).length,
+    landlineSessionURL: result.landlineSessionURL,
+    numLandlineAccounts: (result.landlineAccounts || []).length,
   };
   console.log(`[SYNC] got history ${JSON.stringify(syncSummary)}`);
 
   // Validation
-  assert(result.address === account.address);
-  assert(result.sinceBlockNum === sinceBlockNum);
-  assert(result.lastBlock >= result.sinceBlockNum);
-  assert(result.lastBlockTimestamp > 0);
+  assert(result.address === account.address, "wrong address");
+  assert(result.sinceBlockNum === sinceBlockNum, "wrong sinceBlockNum");
+  assert(result.lastBlock >= result.sinceBlockNum, "invalid lastBlock");
+  assert(result.lastBlockTimestamp > 0, "invalid lastBlockTimestamp");
   assert(
     result.chainGasConstants.paymasterAddress.length % 2 === 0,
     `invalid paymasterAndData ${result.chainGasConstants.paymasterAddress}`
@@ -173,14 +186,22 @@ async function fetchSync(
   return result;
 }
 
-function applySync(account: Account, result: AccountHistoryResult): Account {
+function applySync(
+  account: Account,
+  result: AccountHistoryResult,
+  fromScratch: boolean
+): Account {
   assert(result.address === account.address);
   if (result.lastFinalizedBlock < account.lastFinalizedBlock) {
     console.log(
-      `[SYNC] skipping sync result for ${account.address}. Server has finalized ` +
-        `block ${result.lastFinalizedBlock} < local ${account.lastFinalizedBlock}`
+      `[SYNC] Server has finalized block ${result.lastFinalizedBlock} < local ${account.lastFinalizedBlock}`
     );
-    return account;
+    if (fromScratch) {
+      console.log(`[SYNC] NOT skipping sync from scratch`);
+    } else {
+      console.log(`[SYNC] skipping sync, keeping local account`);
+      return account;
+    }
   }
 
   // Sync in recent transfers
@@ -190,11 +211,9 @@ function applySync(account: Account, result: AccountHistoryResult): Account {
   );
 
   // Add newly onchain transfers
-  const daimoChain = daimoChainFromId(account.homeChainId);
   const recentTransfers = addTransfers(
     oldFinalizedTransfers,
-    result.transferLogs,
-    daimoChain
+    result.transferLogs
   );
 
   // Mark finalized
@@ -206,15 +225,15 @@ function applySync(account: Account, result: AccountHistoryResult): Account {
 
   // Match pending transfers
   const oldPending = account.recentTransfers.filter(
-    (t) => t.status === "pending"
+    (t) => t.status === OpStatus.pending
   );
 
   // Match pending transfers
   // TODO: store validUntil directly on the op
   const stillPending = oldPending.filter(
     (t) =>
-      syncFindSameOp(t.opHash, recentTransfers) == null &&
-      t.timestamp + SEND_DEADLINE_SECS > result.lastBlockTimestamp
+      syncFindSameOp({ opHash: t.opHash, txHash: t.txHash }, recentTransfers) ==
+        null && t.timestamp + SEND_DEADLINE_SECS > result.lastBlockTimestamp
   );
   recentTransfers.push(...stillPending);
 
@@ -256,6 +275,15 @@ function applySync(account: Account, result: AccountHistoryResult): Account {
     namedAccounts,
     accountKeys: result.accountKeys || [],
     pendingKeyRotation: stillPendingKeyRotation,
+    linkedAccounts: result.linkedAccounts || [],
+    profilePicture: result.profilePicture,
+    inviteLinkStatus: result.inviteLinkStatus || null,
+    invitees: result.invitees || [],
+    notificationRequestStatuses: result.notificationRequestStatuses || [],
+    proposedSwaps: result.proposedSwaps || [],
+    exchangeRates: result.exchangeRates || [],
+    landlineSessionURL: result.landlineSessionURL || "",
+    landlineAccounts: result.landlineAccounts || [],
   };
 
   console.log(
@@ -267,18 +295,25 @@ function applySync(account: Account, result: AccountHistoryResult): Account {
         newBlock: result.lastBlock,
         newBalance: amountToDollars(BigInt(result.lastBalance)),
         newTransfers: recentTransfers.length,
-        nPending: recentTransfers.filter((t) => t.status === "pending").length,
+        nPending: recentTransfers.filter((t) => t.status === OpStatus.pending)
+          .length,
+        nNotifReqStatuses: account.notificationRequestStatuses.length,
       })
   );
   return ret;
 }
 
 export function syncFindSameOp(
-  opHash: Hex | undefined,
-  ops: TransferOpEvent[]
-): TransferOpEvent | null {
-  if (opHash == null) return null;
-  return ops.find((r) => opHash === r.opHash) || null;
+  id: PendingOp,
+  ops: TransferClog[]
+): TransferClog | null {
+  return (
+    ops.find(
+      (r) =>
+        (id.opHash && id.opHash === r.opHash) ||
+        (id.txHash && id.txHash === r.txHash)
+    ) || null
+  );
 }
 
 /** Update contacts based on recent interactions */
@@ -301,39 +336,20 @@ function addNamedAccounts(old: EAccount[], found: EAccount[]): EAccount[] {
 
 /** Add transfers based on new Transfer event logs */
 function addTransfers(
-  old: TransferOpEvent[],
-  logs: TransferOpEvent[],
-  daimoChain: DaimoChain
-): TransferOpEvent[] {
-  // Start with old, finalized transfers
-  const ret = [...old];
+  oldLogs: TransferClog[],
+  newLogs: TransferClog[]
+): TransferClog[] {
+  const { logs, remaining } = addLandlineTransfers(oldLogs, newLogs);
 
-  // Sort new logs
+  logs.push(...remaining);
+
+  // Sort logs. Timestamp is determined by block number for on-chain txs.
+  // If timestamp is the same, sort by log index to ensure determinism.
   logs.sort((a, b) => {
-    if (a.blockNumber !== b.blockNumber) return a.blockNumber! - b.blockNumber!;
-    return a.logIndex! - b.logIndex!;
+    const diff = a.timestamp - b.timestamp;
+    if (diff !== 0) return diff;
+    return (a.logIndex || 0) - (b.logIndex || 0);
   });
 
-  // Add new transfers since previous lastFinalizedBlock
-  for (const transfer of logs) {
-    ret.push({
-      type: "transfer",
-      status: OpStatus.confirmed,
-
-      from: transfer.from,
-      to: transfer.to,
-      amount: Number(transfer.amount),
-      nonceMetadata: transfer.nonceMetadata,
-
-      timestamp: guessTimestampFromNum(transfer.blockNumber!, daimoChain),
-      txHash: transfer.txHash,
-      blockNumber: transfer.blockNumber,
-      blockHash: transfer.blockHash,
-      logIndex: transfer.logIndex,
-      opHash: transfer.opHash,
-      feeAmount: transfer.feeAmount,
-    });
-  }
-
-  return ret;
+  return logs;
 }

@@ -1,7 +1,16 @@
-import { KeyData, assert, contractFriendlyKeyToDER } from "@daimo/common";
-import { Pool } from "pg";
+import {
+  KeyData,
+  assert,
+  assertNotNull,
+  contractFriendlyKeyToDER,
+  debugJson,
+  retryBackoff,
+} from "@daimo/common";
+import { Kysely } from "kysely";
 import { Address, Hex, bytesToHex, getAddress } from "viem";
 
+import { Indexer } from "./indexer";
+import { DB as IndexDB } from "../codegen/dbIndex";
 import { chainConfig } from "../env";
 
 export interface KeyChange {
@@ -11,12 +20,11 @@ export interface KeyChange {
   transactionHash: Hex;
   logIndex: number;
   address: Address;
-  account: Address;
   keySlot: number;
   key: [Hex, Hex];
 }
 
-export class KeyRegistry {
+export class KeyRegistry extends Indexer {
   private addrToLogs = new Map<Address, KeyChange[]>();
 
   private keyToAddr = new Map<Hex, Address>();
@@ -25,28 +33,56 @@ export class KeyRegistry {
 
   private listeners: ((logs: KeyChange[]) => void)[] = [];
 
+  constructor() {
+    super("KEY-REG");
+  }
+
   addListener(listener: (logs: KeyChange[]) => void) {
     this.listeners.push(listener);
   }
 
-  async load(pg: Pool, from: bigint, to: bigint) {
+  async load(kdb: Kysely<IndexDB>, from: number, to: number) {
     const startTime = Date.now();
-    const changes: KeyChange[] = [];
-    changes.push(...(await this.loadKeyChange(pg, from, to, "added")));
-    changes.push(...(await this.loadKeyChange(pg, from, to, "removed")));
-    changes!.sort((a, b) => {
-      const bdiff = a.blockNumber - b.blockNumber;
-      if (bdiff !== 0n) return Number(bdiff);
-      const tdiff = a.transactionIndex - b.transactionIndex;
-      if (tdiff !== 0) return tdiff;
-      return a.logIndex - b.logIndex;
-    });
+
+    const rows = await retryBackoff(`keyRegistry-${from}-${to}`, () =>
+      kdb
+        .selectFrom("index.daimo_acct_update")
+        .selectAll()
+        .where("chain_id", "=", "" + chainConfig.chainL2.id)
+        .where((eb) => eb.between("block_num", "" + from, "" + to))
+        .orderBy("block_num")
+        .orderBy("log_idx")
+        .execute()
+    );
+
+    if (this.updateLastProcessedCheckStale(from, to)) return;
+
+    const changes: KeyChange[] = rows
+      .filter((row) => row.key_slot != null)
+      .map((row) => ({
+        change: (function () {
+          if (row.log_name === "SigningKeyAdded") return "added";
+          else if (row.log_name === "SigningKeyRemoved") return "removed";
+          else throw new Error(`Unexpected key log: ${debugJson(row)}`);
+        })(),
+        address: getAddress(bytesToHex(row.log_addr)),
+        blockNumber: BigInt(row.block_num),
+        key: (function () {
+          const k = assertNotNull(row.key);
+          if (k.length !== 64) throw new Error(`Bad key: ${debugJson(row)}`);
+          return [bytesToHex(k.subarray(0, 32)), bytesToHex(k.subarray(32))];
+        })(),
+        keySlot: assertNotNull(row.key_slot),
+        logIndex: Number(row.log_idx),
+        transactionHash: bytesToHex(row.tx_hash),
+        transactionIndex: Number(row.tx_idx),
+      }));
+
     for (const change of changes) {
-      const addr = getAddress(change.address);
-      if (this.addrToLogs.get(addr) === undefined) {
-        this.addrToLogs.set(addr, []);
-      }
-      this.addrToLogs.get(addr)!.push(change);
+      const addr = change.address;
+      const addrLogs = this.addrToLogs.get(addr) || [];
+      addrLogs.push(change);
+      this.addrToLogs.set(addr, addrLogs);
 
       if (!change.key) throw new Error("[KEY-REG] Invalid event, no key");
       const slot = change.keySlot;
@@ -69,7 +105,10 @@ export class KeyRegistry {
         }
         case "removed": {
           const keyData = this.addrToKeyData.get(addr);
-          if (!keyData) throw new Error("[KEY-REG] Invalid event, no key data");
+          if (keyData == null) {
+            console.error("[KEY-REG] ignoring invalid event, no key data");
+            break;
+          }
           this.addrToKeyData.set(
             addr,
             keyData.filter((k) => k.pubKey !== derKey)
@@ -77,64 +116,19 @@ export class KeyRegistry {
           this.keyToAddr.delete(derKey);
           break;
         }
+        default: {
+          throw new Error(`Invalid KeyChange: ${debugJson(change)}`);
+        }
       }
-      console.log(
-        `[KEY-REG] cached ${
-          this.addrToKeyData.get(addr)?.length
-        } key(s) for ${addr}`
-      );
     }
-    console.log(
-      `[KEY-REG] loaded ${changes.length} key changes in ${
-        Date.now() - startTime
-      }ms`
-    );
-    this.listeners.forEach((l) => l(changes));
-  }
+    if (changes.length === 0) return;
 
-  private async loadKeyChange(
-    pg: Pool,
-    from: bigint,
-    to: bigint,
-    change: "added" | "removed"
-  ): Promise<KeyChange[]> {
-    let table: string = "";
-    if (change === "added") {
-      table = "key_added";
-    } else if (change === "removed") {
-      table = "key_removed";
-    } else {
-      throw new Error(`Invalid key change ${change}`);
-    }
-    const result = await pg.query(
-      `
-        select
-          block_num,
-          tx_idx,
-          tx_hash,
-          log_idx,
-          log_addr,
-          account,
-          key_slot,
-          array_agg(key order by abi_idx asc) as key
-        from ${table}
-        where block_num >= $1 and block_num <= $2
-        and chain_id = $3
-        group by block_num, tx_idx, tx_hash, log_idx, log_addr, account, key_slot
-      `,
-      [from, to, chainConfig.chainL2.id]
+    const elapsedMs = (Date.now() - startTime) | 0;
+    console.log(
+      `[KEY-REG] loaded ${changes.length} key changes in ${elapsedMs}ms`
     );
-    return result.rows.map((row) => ({
-      change,
-      blockNumber: BigInt(row.block_num),
-      transactionIndex: row.tx_idx,
-      transactionHash: bytesToHex(row.tx_hash, { size: 32 }),
-      logIndex: row.log_idx,
-      address: getAddress(bytesToHex(row.log_addr, { size: 20 })),
-      account: getAddress(bytesToHex(row.account, { size: 20 })),
-      keySlot: row.key_slot,
-      key: row.key.map((k: Buffer) => bytesToHex(k)) as [Hex, Hex],
-    }));
+
+    this.listeners.forEach((l) => l(changes));
   }
 
   /** Find address by DER key */
@@ -143,7 +137,7 @@ export class KeyRegistry {
   }
 
   /** Find all keys and metadata for a daimo account address */
-  async resolveAddressKeys(addr: Address): Promise<KeyData[] | null> {
+  resolveAddressKeys(addr: Address): KeyData[] | null {
     return this.addrToKeyData.get(addr) || null;
   }
 

@@ -1,61 +1,72 @@
 import {
+  EAccount,
+  TransferClog,
   amountToDollars,
+  assert,
+  formatDaimoLink,
   getAccountName,
-  guessTimestampFromNum,
+  getForeignCoinDisplayAmount,
+  getSynthesizedMemo,
 } from "@daimo/common";
 import {
-  daimoChainFromId,
-  daimoPaymasterAddress,
-  entryPointABI,
+  daimoPaymasterV2Address,
+  entryPointV06ABI,
+  entryPointV06Address,
+  erc20ABI,
 } from "@daimo/contract";
 import { CronJob } from "cron";
-import { Constants } from "userop";
-import { Hex, formatEther } from "viem";
+import { Hex, formatEther, getAddress } from "viem";
 
 import { Telemetry } from "./telemetry";
-import { CoinIndexer, Transfer } from "../contract/coinIndexer";
+import {
+  ForeignCoinIndexer,
+  ForeignTokenTransfer,
+} from "../contract/foreignCoinIndexer";
+import { HomeCoinIndexer, Transfer } from "../contract/homeCoinIndexer";
 import { NameRegistry } from "../contract/nameRegistry";
 import { chainConfig } from "../env";
 import { ViemClient } from "../network/viemClient";
+import { InviteCodeTracker } from "../offchain/inviteCodeTracker";
+import { InviteGraph } from "../offchain/inviteGraph";
 
 export class Crontab {
-  private transfersQueue: Transfer[] = [];
   private cronJobs: CronJob[] = [];
 
   constructor(
     private vc: ViemClient,
-    private coinIndexer: CoinIndexer,
+    private homeCoinIndexer: HomeCoinIndexer,
+    private foreignCoinIndexer: ForeignCoinIndexer,
+    private inviteCodeTracker: InviteCodeTracker,
+    private inviteGraph: InviteGraph,
     private nameRegistry: NameRegistry,
     private telemetry: Telemetry
   ) {}
 
   async init() {
-    this.coinIndexer.pipeAllTransfers(this.pipeTransfers);
     this.cronJobs = [
-      new CronJob("*/5 * * * *", () => this.checkPaymasterDeposit()), // Every 5 minutes
-      new CronJob("*/5 * * * *", () => this.checkFaucetBalance()), // Every 5 minutes
-      new CronJob("*/5 * * * *", () => this.postRecentTransfers()), // Every 5 minutes
+      new CronJob("*/5 * * * *", () => this.checkPaymasterDeposit()),
+      new CronJob("*/5 * * * *", () => this.checkFaucetBalance()),
+      new CronJob("*/1 * * * *", () => this.printStatus()),
     ];
+    this.homeCoinIndexer.addListener(this.pipeTransfers);
+    this.foreignCoinIndexer.addListener(this.pipeForeignCoinTransfers);
 
     this.cronJobs.forEach((job) => job.start());
   }
 
-  private pruneTransfers = () => {
-    this.transfersQueue = this.transfersQueue.filter(
-      (log) =>
-        guessTimestampFromNum(
-          log.blockNumber,
-          daimoChainFromId(chainConfig.chainL2.id)
-        ) *
-          1000 >
-        Date.now() - 1000 * 60 * 5 // Only keep 5 minutes of logs
-    );
-  };
-
-  private pipeTransfers = (logs: Transfer[]) => {
-    this.transfersQueue = this.transfersQueue.concat(logs);
-    this.pruneTransfers();
-  };
+  private printStatus() {
+    const mem = process.memoryUsage();
+    const cpu = process.cpuUsage();
+    const homeCoinIndexer = this.homeCoinIndexer.status();
+    const nameRegistry = this.nameRegistry.status();
+    const status = {
+      mem,
+      cpu,
+      homeCoinIndexer,
+      nameRegistry,
+    };
+    console.log(`[CRON] status: ${JSON.stringify(status)}`);
+  }
 
   async sendLowBalanceMessage(
     balance: number,
@@ -75,10 +86,10 @@ export class Crontab {
 
   async checkPaymasterDeposit() {
     const depositInfo = await this.vc.publicClient.readContract({
-      address: Constants.ERC4337.EntryPoint as Hex,
-      abi: entryPointABI,
+      address: entryPointV06Address as Hex,
+      abi: entryPointV06ABI,
       functionName: "getDepositInfo",
-      args: [daimoPaymasterAddress],
+      args: [daimoPaymasterV2Address],
     });
 
     const depositEth = Number(formatEther(depositInfo.deposit));
@@ -86,46 +97,130 @@ export class Crontab {
 
     await this.sendLowBalanceMessage(
       depositEth,
-      `Paymaster ${daimoPaymasterAddress} ETH`,
-      0.03,
-      0.01
+      `Paymaster ${daimoPaymasterV2Address} ETH`,
+      0.15,
+      0.05
     );
   }
 
   async checkFaucetBalance() {
-    const faucetAddr = this.vc.walletClient.account.address;
+    const faucetAddr = this.vc.account.address;
     const balance = await this.vc.publicClient.getBalance({
       address: faucetAddr,
     });
     const balanceEth = Number(formatEther(balance));
+    console.log(`[CRON] checked faucet ETH balance ${balanceEth}`);
+
     await this.sendLowBalanceMessage(
       balanceEth,
       `Faucet ${faucetAddr} ETH`,
       0.05,
       0.005
     );
+
+    const balanceUSDC = await this.vc.publicClient.readContract({
+      abi: erc20ABI,
+      address: chainConfig.tokenAddress,
+      functionName: "balanceOf",
+      args: [faucetAddr],
+    });
+    const balanceDollars = Number(amountToDollars(balanceUSDC));
+    console.log(`[CRON] checked faucet USDC balance ${balanceDollars}`);
+
+    await this.sendLowBalanceMessage(
+      balanceDollars,
+      `Faucet ${faucetAddr} USDC`,
+      250,
+      25
+    );
   }
 
-  async postRecentTransfers() {
-    this.pruneTransfers();
-    for (const transfer of this.transfersQueue) {
+  private pipeTransfers = (logs: Transfer[]) => {
+    for (const transfer of logs) {
       const fromName = this.nameRegistry.resolveDaimoNameForAddr(transfer.from);
       const toName = this.nameRegistry.resolveDaimoNameForAddr(transfer.to);
+      if (fromName == null && toName == null) return;
 
-      if (fromName == null && toName == null) continue;
-
-      const fromDisplayName = getAccountName(
-        await this.nameRegistry.getEAccount(transfer.from)
-      );
-      const toDisplayName = getAccountName(
-        await this.nameRegistry.getEAccount(transfer.to)
-      );
-
-      this.telemetry.recordClippy(
-        `Transfer: ${fromDisplayName} -> ${toDisplayName} $${amountToDollars(
-          transfer.value
-        )}`
-      );
+      const acct = getAddress(fromName == null ? transfer.to : transfer.from);
+      const opEvent = this.homeCoinIndexer.createTransferClog(transfer, acct);
+      this.postRecentTransfer(opEvent, fromName, toName);
     }
+  };
+
+  private pipeForeignCoinTransfers = (logs: ForeignTokenTransfer[]) => {
+    for (const transfer of logs) {
+      this.postRecentForeignCoinTransfer(transfer);
+    }
+  };
+
+  async postRecentTransfer(
+    opEvent: TransferClog,
+    fromName?: string,
+    toName?: string
+  ) {
+    assert(fromName != null || toName != null);
+
+    const [fromAcc, toAcc] = await Promise.all([
+      this.nameRegistry.getEAccount(opEvent.from),
+      this.nameRegistry.getEAccount(opEvent.to),
+    ]);
+
+    const getAccountInfo = async (acc: EAccount) => {
+      const invitees = this.inviteGraph.getInvitees(acc.addr);
+      const inviteCode =
+        await this.inviteCodeTracker.getBestInviteCodeForSender(acc.addr);
+      const inviteStatus = inviteCode
+        ? await this.inviteCodeTracker.getInviteCodeStatus({
+            type: "invite",
+            code: inviteCode,
+          })
+        : undefined;
+
+      return `${getAccountName(acc)} (${invitees.length} invitees, ${
+        inviteStatus?.usesLeft || 0
+      } available)`;
+    };
+
+    const memo = getSynthesizedMemo(opEvent, chainConfig);
+
+    // Post to Clippy
+    const parts = [
+      "Transfer:",
+      await getAccountInfo(fromAcc),
+      "->",
+      await getAccountInfo(toAcc),
+      "$" + amountToDollars(opEvent.amount),
+      opEvent.type === "transfer" &&
+        opEvent.requestStatus &&
+        `for ${formatDaimoLink(opEvent.requestStatus.link)}`,
+      memo && `: ${memo}`,
+      opEvent.blockNumber != null &&
+        opEvent.logIndex != null &&
+        `https://ethreceipts.org/l/${chainConfig.chainL2.id}/${opEvent.blockNumber}/${opEvent.logIndex}`,
+    ];
+    const clippyMessage = parts.filter(Boolean).join(" ");
+    this.telemetry.recordClippy(clippyMessage);
+  }
+
+  async postRecentForeignCoinTransfer(transfer: ForeignTokenTransfer) {
+    const fromName = this.nameRegistry.resolveDaimoNameForAddr(transfer.from);
+    const toName = this.nameRegistry.resolveDaimoNameForAddr(transfer.to);
+
+    if (fromName == null && toName == null) return;
+
+    const fromDisplayName = getAccountName(
+      await this.nameRegistry.getEAccount(transfer.from)
+    );
+    const toDisplayName = getAccountName(
+      await this.nameRegistry.getEAccount(transfer.to)
+    );
+
+    const humanReadableValue = getForeignCoinDisplayAmount(
+      transfer.value.toString() as `${bigint}`,
+      transfer.foreignToken
+    );
+    this.telemetry.recordClippy(
+      `Forex Transfer: ${fromDisplayName} -> ${toDisplayName} ${humanReadableValue} ${transfer.foreignToken.symbol} `
+    );
   }
 }

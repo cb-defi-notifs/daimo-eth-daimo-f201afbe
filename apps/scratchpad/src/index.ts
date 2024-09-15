@@ -1,15 +1,29 @@
-import { CoinIndexer } from "@daimo/api/src/contract/coinIndexer";
+import { ProfileCache } from "@daimo/api/src/api/profile";
+import { ClogMatcher } from "@daimo/api/src/contract/ClogMatcher";
+import { ForeignCoinIndexer } from "@daimo/api/src/contract/foreignCoinIndexer";
+import { HomeCoinIndexer } from "@daimo/api/src/contract/homeCoinIndexer";
 import { NameRegistry } from "@daimo/api/src/contract/nameRegistry";
+import { NoteIndexer } from "@daimo/api/src/contract/noteIndexer";
 import { OpIndexer } from "@daimo/api/src/contract/opIndexer";
+import { RequestIndexer } from "@daimo/api/src/contract/requestIndexer";
+import { DB } from "@daimo/api/src/db/db";
+import { StubExternalApiCache } from "@daimo/api/src/db/externalApiCache";
 import { getViemClientFromEnv } from "@daimo/api/src/network/viemClient";
+import { InviteGraph } from "@daimo/api/src/offchain/inviteGraph";
+import { PaymentMemoTracker } from "@daimo/api/src/offchain/paymentMemoTracker";
+import { Telemetry } from "@daimo/api/src/server/telemetry";
+import { TokenRegistry } from "@daimo/api/src/server/tokenRegistry";
 import { guessTimestampFromNum } from "@daimo/common";
 import { daimoChainFromId, nameRegistryProxyConfig } from "@daimo/contract";
 import csv from "csvtojson";
+import { dnsEncode } from "ethers/lib/utils";
 
 import { checkAccount, checkAccountDesc } from "./checkAccount";
-import { createAccount, createAccountDesc } from "./createAccount";
 import { chainConfig } from "./env";
+import { getEacc, getEaccDesc } from "./getEacc";
+import { getFids, getFidsDesc } from "./getFids";
 import { pushNotify, pushNotifyDesc } from "./pushNotify";
+import { testBinance, testBinanceDesc } from "./testBinance";
 
 main()
   .then(() => console.log("Done"))
@@ -19,10 +33,12 @@ async function main() {
   const commands = [
     { name: "default", desc: defaultDesc(), fn: defaultScript },
     { name: "metrics", desc: metricsDesc(), fn: metrics },
-    { name: "create", desc: createAccountDesc(), fn: createAccount },
     { name: "check", desc: checkAccountDesc(), fn: checkAccount },
     { name: "mailing-list", desc: mailingListDesc(), fn: mailingList },
     { name: "push-notify", desc: pushNotifyDesc(), fn: pushNotify },
+    { name: "get-fids", desc: getFidsDesc(), fn: getFids },
+    { name: "get-eaccount", desc: getEaccDesc(), fn: getEacc },
+    { name: "test-binance", desc: testBinanceDesc(), fn: testBinance },
   ];
 
   const cmdName = process.argv[2] || "default";
@@ -44,6 +60,15 @@ function defaultDesc() {
 
 async function defaultScript() {
   console.log("Hello, world");
+
+  let addr = "6152348912fb1e78c9037d83f9d4524d4a2988ed".toLowerCase();
+  console.log(`addr ${addr} dnsEncode ` + dnsEncode(`${addr}.addr.reverse`));
+
+  addr = "179A862703a4adfb29896552DF9e307980D19285".toLowerCase();
+  console.log(`addr ${addr} dnsEncode ` + dnsEncode(`${addr}.addr.reverse`));
+
+  addr = "179A862703a4adfb29896552DF9e307980D19286".toLowerCase();
+  console.log(`addr ${addr} dnsEncode ` + dnsEncode(`${addr}.addr.reverse`));
 }
 
 function metricsDesc() {
@@ -51,12 +76,30 @@ function metricsDesc() {
 }
 
 async function metrics() {
-  const vc = getViemClientFromEnv();
+  const vc = getViemClientFromEnv(new Telemetry(), new StubExternalApiCache());
 
-  console.log(`[METRICS] using wallet ${vc.walletClient.account.address}`);
-  const nameReg = new NameRegistry(vc, new Set([]));
-  const opIndexer = new OpIndexer();
-  const coinIndexer = new CoinIndexer(vc, opIndexer);
+  console.log(`[METRICS] using wallet ${vc.account.address}`);
+  const db = new DB();
+  const inviteGraph = new InviteGraph(db);
+  const profileCache = new ProfileCache(vc, db);
+  const nameReg = new NameRegistry(vc, inviteGraph, profileCache, new Set([]));
+  const paymentMemoTracker = new PaymentMemoTracker(db);
+  const tokenReg = new TokenRegistry();
+
+  const clogMatcher = new ClogMatcher(tokenReg);
+  const opIndexer = new OpIndexer(clogMatcher);
+  const noteIndexer = new NoteIndexer(nameReg, opIndexer, paymentMemoTracker);
+  const requestIndexer = new RequestIndexer(db, nameReg, paymentMemoTracker);
+  const foreignCoinIndexer = new ForeignCoinIndexer(nameReg, vc, tokenReg);
+  const coinIndexer = new HomeCoinIndexer(
+    vc,
+    opIndexer,
+    noteIndexer,
+    requestIndexer,
+    foreignCoinIndexer,
+    paymentMemoTracker,
+    clogMatcher
+  );
 
   console.log(`[METRICS] using ${vc.publicClient.chain.name}`);
   console.log(`[METRICS] compiling signups ${nameRegistryProxyConfig.address}`);

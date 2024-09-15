@@ -1,11 +1,13 @@
 import {
-  EAccount,
-  OpStatus,
   assert,
   canSendTo,
   dollarsToAmount,
+  EAccount,
   hasAccountName,
+  OpStatus,
+  ProposedSwap,
 } from "@daimo/common";
+import { ForeignToken, getDAv2Chain, getTokenByAddress } from "@daimo/contract";
 import {
   DaimoNonce,
   DaimoNonceMetadata,
@@ -17,81 +19,131 @@ import { ActivityIndicator } from "react-native";
 
 import {
   transferAccountTransform,
-  useSendAsync,
+  useSendWithDeviceKeyAsync,
 } from "../../../action/useSendAsync";
-import { Account } from "../../../model/account";
-import { Recipient } from "../../../sync/recipients";
+import { useExitToHome } from "../../../common/nav";
+import { i18n } from "../../../i18n";
+import {
+  EAccountContact,
+  LandlineBankAccountContact,
+} from "../../../logic/daimoContacts";
+import { Account } from "../../../storage/account";
 import { getAmountText } from "../../shared/Amount";
 import { LongPressBigButton } from "../../shared/Button";
 import { ButtonWithStatus } from "../../shared/ButtonWithStatus";
-import { navResetToHome, useNav } from "../../shared/nav";
 import { TextError } from "../../shared/text";
-import { useWithAccount } from "../../shared/withAccount";
 
-interface SendTransferButtonProps {
-  recipient: Recipient;
-  dollars: number;
-  requestId?: `${bigint}`;
-}
+const i18 = i18n.sendTransferButton;
 
-export function SendTransferButton(props: SendTransferButtonProps) {
-  const Inner = useWithAccount(SendTransferButtonInner);
-  return <Inner {...props} />;
-}
-
-function SendTransferButtonInner({
+export function SendTransferButton({
   account,
   recipient,
   dollars,
-  requestId,
-}: SendTransferButtonProps & { account: Account }) {
-  console.log(`[SEND] rendering SendButton ${dollars} ${requestId}`);
+  toCoin,
+  memo,
+  minTransferAmount = 0,
+  route,
+  onSuccess,
+}: {
+  account: Account;
+  recipient: EAccountContact | LandlineBankAccountContact;
+  dollars: number;
+  toCoin: ForeignToken;
+  memo?: string;
+  minTransferAmount?: number;
+  route?: ProposedSwap | null;
+  onSuccess?: () => void;
+}) {
+  console.log(`[SEND] rendering SendButton ${dollars}`);
 
   // Get exact amount. No partial cents.
-  assert(dollars >= 0);
+  assert(dollars > 0);
   const maxDecimals = 2;
   const dollarsStr = dollars.toFixed(maxDecimals) as `${number}`;
 
   // Generate nonce
-  const nonceMetadata = requestId
-    ? new DaimoNonceMetadata(DaimoNonceType.RequestResponse, BigInt(requestId))
-    : new DaimoNonceMetadata(DaimoNonceType.Send);
-  const nonce = useMemo(() => new DaimoNonce(nonceMetadata), [requestId]);
+  const nonce = useMemo(
+    () => new DaimoNonce(new DaimoNonceMetadata(DaimoNonceType.Send)),
+    []
+  );
+
+  // Note whether the transfer has a swap or not for op creation.
+  const { homeChainId, homeCoinAddress } = account;
+  const homeCoin = getTokenByAddress(homeChainId, homeCoinAddress);
+  const isBridge = toCoin.chainId !== homeChainId;
+  const isSwap = !isBridge && homeCoin.token !== toCoin.token;
+
+  // Pending swap, appears immediately > replaced by onchain data
+  const pendingOpBase = {
+    from: account.address,
+    to: recipient.addr,
+    amount: Number(dollarsToAmount(dollarsStr)),
+    memo,
+    status: OpStatus.pending,
+    timestamp: 0,
+  };
 
   // On exec, request signature from device enclave, send transfer.
-  const { status, message, cost, exec } = useSendAsync({
+  const { status, message, cost, exec } = useSendWithDeviceKeyAsync({
     dollarsToSend: dollars,
     sendFn: async (opSender: DaimoOpSender) => {
       assert(dollars > 0);
-      console.log(`[ACTION] sending $${dollarsStr} to ${recipient.addr}`);
-      return opSender.erc20transfer(recipient.addr, dollarsStr, {
+      console.log(
+        `[ACTION] sending $${dollarsStr} ${toCoin.symbol} to ${recipient.addr}`
+      );
+      const opMetadata = {
         nonce,
         chainGasConstants: account.chainGasConstants,
-      });
+      };
+
+      if (toCoin.chainId !== homeChainId) {
+        // TODO: handle case with swap and bridge
+        assert(toCoin.symbol === homeCoin.symbol);
+
+        const toChain = getDAv2Chain(toCoin.chainId);
+        console.log(`[ACTION] sending via FastCCTP to chain ${toChain.name}`);
+        return opSender.sendUsdcToOtherChain(
+          recipient.addr,
+          toChain,
+          dollarsStr,
+          opMetadata,
+          memo
+        );
+      } else if (isSwap) {
+        if (route == null) {
+          throw new Error("missing swap route");
+        }
+        // Swap and transfer if outbound coin is different than home coin.
+        console.log(`[ACTION] sending via swap with route ${route}`);
+        return opSender.executeProposedSwap(route, opMetadata);
+      }
+
+      // Otherwise, just send home coin directly.
+      return opSender.erc20transfer(
+        recipient.addr,
+        dollarsStr,
+        opMetadata,
+        memo
+      );
     },
-    pendingOp: {
-      type: "transfer",
-      from: account.address,
-      to: recipient.addr,
-      amount: Number(dollarsToAmount(dollarsStr)),
-      status: OpStatus.pending,
-      timestamp: 0,
-      nonceMetadata: nonceMetadata.toHex(),
-    },
+    pendingOp: { type: "transfer", ...pendingOpBase },
     accountTransform: transferAccountTransform(
       hasAccountName(recipient) ? [recipient as EAccount] : []
     ),
   });
 
+  const insufficientFundsStr = i18.disabledReason.insufficientFunds();
   const sendDisabledReason = (function () {
     if (account.lastBalance < dollarsToAmount(cost.totalDollars)) {
-      return "Insufficient funds";
+      return insufficientFundsStr;
     } else if (account.address === recipient.addr) {
-      return "Can't send to yourself";
+      return i18.disabledReason.self();
     } else if (!canSendTo(recipient)) {
-      return "Can't send to this account";
+      return i18.disabledReason.other();
     } else if (Number(dollarsStr) === 0) {
-      return "Enter an amount";
+      return i18.disabledReason.zero();
+    } else if (Number(dollarsStr) < minTransferAmount) {
+      return i18.disabledReason.min(minTransferAmount);
     } else {
       return undefined;
     }
@@ -104,11 +156,12 @@ function SendTransferButtonInner({
       case "error":
         return (
           <LongPressBigButton
-            title="HOLD TO SEND"
+            title={i18.holdButton()}
             onPress={disabled ? undefined : exec}
             type="primary"
             disabled={disabled}
             duration={400}
+            showBiometricIcon
           />
         );
       case "loading":
@@ -120,28 +173,47 @@ function SendTransferButtonInner({
 
   const statusMessage = (function (): ReactNode {
     switch (status) {
-      case "idle":
-        if (sendDisabledReason != null)
+      case "idle": {
+        const totalStr = getAmountText({ dollars: cost.totalDollars });
+        const hasFee = cost.feeDollars > 0;
+        if (sendDisabledReason === insufficientFundsStr && hasFee) {
+          return (
+            <TextError>
+              {i18.statusMsg.insufficientFundsPlusFee(totalStr)}
+            </TextError>
+          );
+        } else if (sendDisabledReason === insufficientFundsStr) {
+          return <TextError>{insufficientFundsStr}</TextError>;
+        } else if (sendDisabledReason != null) {
           return <TextError>{sendDisabledReason}</TextError>;
-        if (dollars === 0) return null;
-        return `Total incl. fees ${getAmountText({
-          dollars: cost.totalDollars,
-        })}`;
-      case "loading":
+        } else if (hasFee) {
+          return i18.statusMsg.totalDollars(totalStr);
+        } else {
+          return i18.statusMsg.paymentsPublic();
+        }
+      }
+      case "loading": {
         return message;
-      case "error":
+      }
+      case "error": {
         return <TextError>{message}</TextError>;
-      default:
+      }
+      default: {
         return null;
+      }
     }
   })();
 
   // On success, go home, show newly created transaction
-  const nav = useNav();
+  const goHome = useExitToHome();
   useEffect(() => {
     if (status !== "success") return;
-    navResetToHome(nav);
-  }, [status]);
+    if (onSuccess) {
+      onSuccess();
+    } else {
+      goHome();
+    }
+  }, [status, onSuccess, goHome]);
 
   return <ButtonWithStatus button={button} status={statusMessage} />;
 }

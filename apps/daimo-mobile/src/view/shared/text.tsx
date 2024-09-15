@@ -1,51 +1,105 @@
 import Octicons from "@expo/vector-icons/Octicons";
 import { ReactNode, useMemo } from "react";
-import { Text, TextProps, TextStyle } from "react-native";
+import { Text, TextProps } from "react-native";
 
 import { color, ss } from "./style";
 
-function useStyle(baseStyle: TextStyle, { color }: { color?: string }) {
-  return useMemo(() => [baseStyle, { color }], [baseStyle, color]);
+export const MAX_FONT_SIZE_MULTIPLIER = 1.4;
+
+type TypographyProps = TextProps & {
+  variant?:
+    | "h1"
+    | "h2"
+    | "h3"
+    | "body"
+    | "bodyCaps"
+    | "bodyMedium"
+    | "metadata"
+    | "metadataLight"
+    | "para"
+    | "btnCaps"
+    | "error"
+    | "center"
+    | "emphasizedSmallText"
+    | "dropdown";
+  color?: string;
+};
+
+// Temporary component for text management pending a full refactor
+export function DaimoText({
+  variant = "body",
+  color,
+  style,
+  ...props
+}: TypographyProps) {
+  return (
+    <Text
+      style={[ss.text[variant], { color }, style]}
+      maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+      {...props}
+    />
+  );
 }
 
-export function TextH1(props: TextProps & { color?: string }) {
-  return <Text {...props} style={useStyle(ss.text.h1, props)} />;
+export function TextH1(props: TypographyProps) {
+  return <DaimoText variant="h1" {...props} />;
 }
 
-export function TextH2(props: TextProps & { color?: string }) {
-  return <Text {...props} style={useStyle(ss.text.h2, props)} />;
+export function TextH2(props: TypographyProps) {
+  return <DaimoText variant="h2" {...props} />;
 }
 
-export function TextH3(props: TextProps & { color?: string }) {
-  return <Text {...props} style={useStyle(ss.text.h3, props)} />;
+export function TextH3(props: TypographyProps) {
+  return <DaimoText variant="h3" {...props} />;
 }
 
-export function TextBody(props: TextProps & { color?: string }) {
-  return <Text {...props} style={useStyle(ss.text.body, props)} />;
+export function TextBody(props: TypographyProps) {
+  return <DaimoText variant="body" {...props} />;
 }
 
-export function TextMeta(props: TextProps & { color?: string }) {
-  return <Text {...props} style={useStyle(ss.text.metadata, props)} />;
+export function TextBodyCaps(props: TypographyProps) {
+  return <DaimoText variant="bodyCaps" {...props} />;
 }
 
-export function TextPara(props: TextProps) {
-  return <Text {...props} style={ss.text.para} />;
+export function TextBodyMedium(props: TypographyProps) {
+  return <DaimoText variant="bodyMedium" {...props} />;
+}
+
+export function TextMeta(props: TypographyProps) {
+  return <DaimoText variant="metadata" {...props} />;
+}
+
+export function TextPara(props: TypographyProps) {
+  return <DaimoText variant="para" {...props} />;
+}
+
+export function TextBtnCaps(props: TypographyProps) {
+  return <DaimoText variant="btnCaps" {...props} />;
 }
 
 export function TextLight(props: TextProps) {
   return <TextBody {...props} color={color.gray3} />;
 }
 
+export function TextColor(props: TextProps & { color: string }) {
+  const style = useMemo(() => [{ color: props.color }], [props.color]);
+  return <DaimoText {...props} style={style} />;
+}
+
 export function TextBold(props: TextProps) {
-  return <Text {...props} style={ss.text.bold} />;
+  return <DaimoText {...props} style={ss.text.bold} />;
+}
+
+export function TextLink(props: TextProps) {
+  return <DaimoText {...props} style={ss.text.link} />;
 }
 
 export function TextCenter(props: TextProps) {
-  return <Text {...props} style={ss.text.center} />;
+  return <DaimoText {...props} style={ss.text.center} />;
 }
 
 export function TextError(props: TextProps) {
-  return <Text {...props} style={ss.text.error} />;
+  return <DaimoText {...props} style={ss.text.error} />;
 }
 
 type OcticonName = React.ComponentProps<typeof Octicons>["name"];
@@ -63,11 +117,19 @@ export function EmojiToOcticon({ text, size }: { text: string; size: number }) {
   let match, last;
   for (last = 0; (match = regex.exec(text)) != null; last = regex.lastIndex) {
     const joiningPart = text.substring(last, match.index);
-    parts.push(<Text key={last}>{joiningPart}</Text>);
+    parts.push(
+      <Text key={last} allowFontScaling={false}>
+        {joiningPart}
+      </Text>
+    );
     const octiconName = emojiToOcticon[match[0]];
     parts.push(<Octicons key={last + 1} size={size} name={octiconName} />);
   }
-  parts.push(<Text key={last}>{text.substring(last)}</Text>);
+  parts.push(
+    <Text key={last} allowFontScaling={false}>
+      {text.substring(last)}
+    </Text>
+  );
 
   return <>{parts}</>;
 }

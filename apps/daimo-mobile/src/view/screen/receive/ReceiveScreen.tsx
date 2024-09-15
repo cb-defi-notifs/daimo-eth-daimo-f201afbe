@@ -1,157 +1,222 @@
-import { dollarsToAmount, formatDaimoLink } from "@daimo/common";
-import { MAX_NONCE_ID_SIZE_BITS } from "@daimo/userop";
-import { useIsFocused } from "@react-navigation/native";
-import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { useRef, useState } from "react";
 import {
-  Alert,
+  dollarsToAmount,
+  encodeRequestId,
+  generateRequestId,
+} from "@daimo/common";
+import { daimoChainFromId } from "@daimo/contract";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
   Keyboard,
-  Platform,
-  Share,
-  ShareAction,
+  StyleSheet,
   TextInput,
   TouchableWithoutFeedback,
   View,
 } from "react-native";
-import { Hex } from "viem";
-import { generatePrivateKey } from "viem/accounts";
 
-import { Account, useAccount } from "../../../model/account";
+import { useActStatus } from "../../../action/actStatus";
+import {
+  ParamListHome,
+  useExitBack,
+  useExitToHome,
+  useNav,
+} from "../../../common/nav";
+import { i18n } from "../../../i18n";
+import { getAccountManager } from "../../../logic/accountManager";
+import { DaimoContact } from "../../../logic/daimoContacts";
+import {
+  ExternalAction,
+  getComposeExternalAction,
+  shareURL,
+} from "../../../logic/externalAction";
+import { getFullMemo } from "../../../logic/memo";
+import { MoneyEntry, zeroUSDEntry } from "../../../logic/moneyEntry";
+import { getRpcFunc, getRpcHook } from "../../../logic/trpc";
+import { Account } from "../../../storage/account";
 import { AmountChooser } from "../../shared/AmountInput";
 import { ButtonBig } from "../../shared/Button";
-import { ScreenHeader, useExitToHome } from "../../shared/ScreenHeader";
+import { ContactDisplay } from "../../shared/ContactDisplay";
+import { InfoBox } from "../../shared/InfoBox";
+import { ScreenHeader } from "../../shared/ScreenHeader";
 import Spacer from "../../shared/Spacer";
-import {
-  ParamListReceive,
-  useFocusOnScreenTransitionEnd,
-  useNav,
-} from "../../shared/nav";
 import { ss } from "../../shared/style";
 import { TextCenter, TextLight } from "../../shared/text";
 import { useWithAccount } from "../../shared/withAccount";
+import { SendMemoButton } from "../send/MemoDisplay";
 
-type Props = NativeStackScreenProps<ParamListReceive, "Receive">;
+type Props = NativeStackScreenProps<ParamListHome, "Receive">;
+const i18 = i18n.receive;
 
-export default function ReceiveScreen({ route }: Props) {
-  const { autoFocus } = route.params || {};
+export function ReceiveScreen({ route }: Props) {
   const Inner = useWithAccount(RequestScreenInner);
-  return <Inner autoFocus={!!autoFocus} />;
+  return <Inner {...route.params} />;
 }
 
 function RequestScreenInner({
   account,
-  autoFocus,
+  fulfiller,
 }: {
   account: Account;
-  autoFocus: boolean;
+  fulfiller?: DaimoContact;
 }) {
-  const [dollars, setDollars] = useState(0);
-
-  // On successful send, go home
-  const [status, setStatus] = useState<"creating" | "sending" | "sent">(
-    "creating"
-  );
-  const trackRequest = useTrackRequest();
-
-  const isFocused = useIsFocused();
+  // Nav
   const nav = useNav();
+  const goBack = useExitBack();
+  const goHome = useExitToHome();
+
+  // Enter amount, autofocus
+  const [money, setMoney] = useState(zeroUSDEntry);
   const textInputRef = useRef<TextInput>(null);
+  useEffect(() => {
+    // Set focus on transitionEnd to avoid stack navigator iOS glitches.
+    const unsubscribe = nav.addListener("transitionEnd", () =>
+      textInputRef.current?.focus()
+    );
+    return unsubscribe;
+  }, []);
 
-  // Work around react-navigation autofocus bug
-  useFocusOnScreenTransitionEnd(textInputRef, nav, isFocused, autoFocus);
-
-  const sendRequest = async () => {
-    try {
-      textInputRef.current?.blur();
-      setStatus("sending");
-
-      const requestId = generateRequestID();
-
-      const url = formatDaimoLink({
-        type: "request",
-        recipient: account.name,
-        dollars: `${dollars}`,
-        requestId,
-      });
-
-      let result: ShareAction;
-      if (Platform.OS === "android") {
-        result = await Share.share({ message: url });
-      } else {
-        result = await Share.share({ url }); // Default behavior for iOS
-      }
-
-      console.log(`[REQUEST] action ${result.action}`);
-      if (result.action === Share.sharedAction) {
-        console.log(`[REQUEST] shared, activityType: ${result.activityType}`);
-        setStatus("sent");
-        trackRequest(requestId, dollars);
-        nav.navigate("HomeTab", { screen: "Home" });
-      } else if (result.action === Share.dismissedAction) {
-        // Only on iOS
-        console.log(`[REQUEST] share dismissed`);
-        setStatus("creating");
-      }
-    } catch (error: any) {
-      Alert.alert(error.message);
+  // Share request link to share sheet or to a specific phone contact
+  const [externalAction, setExternalAction] = useState<
+    ExternalAction | undefined
+  >(undefined);
+  useEffect(() => {
+    if (!fulfiller) {
+      // Share URL
+      setExternalAction({ type: "share", exec: shareURL });
+    } else if (fulfiller.type === "email" || fulfiller.type === "phoneNumber") {
+      // Compose email or SMS, fallback to share sheet
+      getComposeExternalAction(fulfiller).then(setExternalAction);
     }
+  }, [fulfiller]);
+
+  // Enter optional memo
+  const [memo, setMemo] = useState<string | undefined>(undefined);
+  const rpcHook = getRpcHook(daimoChainFromId(account.homeChainId));
+  const result = rpcHook.validateMemo.useQuery({ memo });
+  const memoStatus = result.data;
+
+  // Send request
+  const [as, setAS] = useActStatus("request");
+  const sendRequest = async () => {
+    textInputRef.current?.blur();
+    setAS("loading", i18.sendRequest.loading());
+
+    // Create-request transaction
+    const { txHash, pendingRequestStatus } = await createRequestOnChain(
+      account,
+      money,
+      fulfiller,
+      getFullMemo(memo, money)
+    );
+    console.log(`[REQUEST] txHash ${txHash}`);
+
+    // Show pending outbound request optimistically, before tx confirms
+    getAccountManager().transform((a) => ({
+      ...a,
+      notificationRequestStatuses: [
+        ...a.notificationRequestStatuses,
+        pendingRequestStatus,
+      ],
+    }));
+
+    // Share action
+    if (externalAction) {
+      console.log(`[REQUEST] external action ${externalAction.type}`);
+      const didShare = await externalAction.exec(pendingRequestStatus.link);
+      console.log(`[REQUEST] action ${didShare}`);
+    }
+
+    setAS("success");
+    nav.navigate("HomeTab", { screen: "Home" });
   };
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <View style={ss.container.screen}>
-        <ScreenHeader title="Request" onExit={useExitToHome()} />
-        <Spacer h={96} />
-        <TextCenter>
-          <TextLight>Enter amount to request</TextLight>
-        </TextCenter>
+        <ScreenHeader title={i18.screenHeader()} onBack={goBack || goHome} />
         <Spacer h={8} />
-        <AmountChooser
-          dollars={dollars}
-          onSetDollars={setDollars}
-          showAmountAvailable={false}
-          autoFocus={false}
-          lagAutoFocus={false}
-          innerRef={textInputRef}
-          disabled={status !== "creating"}
-        />
-        <Spacer h={32} />
-        <View style={ss.container.padH16}>
-          <ButtonBig
-            type={status === "sent" ? "success" : "primary"}
-            disabled={dollars <= 0 || status !== "creating"}
-            title={status === "sent" ? "Sent" : "Send Request"}
-            onPress={sendRequest}
+        {!fulfiller && (
+          <InfoBox
+            title={i18.sendRequest.title()}
+            subtitle={i18.sendRequest.subtitle()}
           />
+        )}
+        <Spacer h={24} />
+        {fulfiller && <ContactDisplay contact={fulfiller} />}
+        <Spacer h={32} />
+        <AmountChooser
+          moneyEntry={money}
+          onSetEntry={setMoney}
+          showAmountAvailable={false}
+          innerRef={textInputRef}
+          disabled={as.status !== "idle"}
+          autoFocus={false}
+        />
+        <Spacer h={16} />
+        <SendMemoButton memo={memo} memoStatus={memoStatus} setMemo={setMemo} />
+        <Spacer h={32} />
+        <View style={ss.container.padH8}>
+          {as.status === "loading" ? (
+            <>
+              <ActivityIndicator size="large" />
+              <Spacer h={32} />
+              <TextCenter>
+                <TextLight>{as.message}</TextLight>
+              </TextCenter>
+            </>
+          ) : (
+            <View style={styles.buttonGroup}>
+              <View style={styles.buttonGrow}>
+                <ButtonBig
+                  type="subtle"
+                  title={i18n.shared.buttonAction.cancel()}
+                  onPress={goBack || goHome}
+                />
+              </View>
+              <View style={styles.buttonGrow}>
+                <ButtonBig
+                  type={as.status === "success" ? "success" : "primary"}
+                  disabled={money.dollars <= 0 || as.status !== "idle"}
+                  title={as.status === "success" ? "Sent" : "Request"}
+                  onPress={sendRequest}
+                />
+              </View>
+            </View>
+          )}
         </View>
       </View>
     </TouchableWithoutFeedback>
   );
 }
 
-function useTrackRequest() {
-  // TODO: use AccountManager. Delayed setAccount can clobber data.
-  const [account, setAccount] = useAccount();
-  return (requestId: `${bigint}`, dollars: number) => {
-    if (account == null) return;
-    const newAccount = {
-      ...account,
-      trackedRequests: [
-        ...account.trackedRequests,
-        {
-          requestId,
-          amount: `${dollarsToAmount(dollars)}` as `${bigint}`,
-        },
-      ],
-    };
-    setAccount(newAccount);
-  };
+async function createRequestOnChain(
+  account: Account,
+  money: MoneyEntry,
+  fulfiller?: DaimoContact,
+  memo?: string
+) {
+  const id = generateRequestId();
+  const idString = encodeRequestId(id);
+  const rpcFunc = getRpcFunc(daimoChainFromId(account.homeChainId));
+
+  const { txHash, status } = await rpcFunc.createRequestSponsoredV2.mutate({
+    recipient: account.address,
+    idString,
+    amount: `${dollarsToAmount(money.dollars)}`,
+    fulfiller: fulfiller?.type === "eAcc" ? fulfiller.addr : undefined,
+    memo,
+  });
+
+  return { txHash, pendingRequestStatus: status };
 }
 
-function generateRequestID() {
-  const hexRandomString = generatePrivateKey().slice(
-    0,
-    2 + Number(MAX_NONCE_ID_SIZE_BITS / 4n) // One hex is 4 bits
-  ) as Hex; // Uses secure random.
-  return `${BigInt(hexRandomString)}` as `${bigint}`;
-}
+const styles = StyleSheet.create({
+  buttonGroup: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  buttonGrow: {
+    flex: 1,
+  },
+});

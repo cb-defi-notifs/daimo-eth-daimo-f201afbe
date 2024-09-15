@@ -1,50 +1,65 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { detectPlatform, downloadMetadata } from "../utils/platform";
+import { TextBold } from "./typography";
+import { useI18N } from "../i18n/context";
+import { detectPlatform, getDownloadMetadata } from "../utils/platform";
 
 export function DownloadLink() {
-  const [, link] = useDownloadTitleLink();
+  const i18n = useI18N();
+  const i18 = i18n.components.downloadLink;
   return (
     <Link
-      href={link}
+      href={"/download"}
       target="_blank"
-      className="text-primaryLight font-semibold text-sm"
+      className="px-9 py-5 bg-primary rounded-lg"
     >
-      Download
+      <TextBold>{i18.download()}</TextBold>
     </Link>
   );
 }
 
 export function DownloadLinkButton() {
-  const [title, link] = useDownloadTitleLink();
+  const i18n = useI18N();
+  const i18 = i18n.components.downloadLink;
   return (
     <Link
-      href={link}
+      href={"/download"}
       target="_blank"
-      className="inline-block rounded-lg py-7 px-9 bg-primaryLight text-white font-semibold md:text-xl tracking-wider"
+      className="flex items-center space-x-2 lg:space-x-4 rounded-lg py-[15px] px-[36px] bg-primary text-white font-semibold md:text-2xl tracking-tight whitespace-nowrap min-w-[240px] "
     >
-      {title}
+      <div>{i18.download()}</div>
+      <Image
+        src={"/assets/daimo-qr-download.png"}
+        width={72}
+        height={72}
+        alt="QR Code"
+      />
     </Link>
   );
 }
 
-function useDownloadTitleLink() {
-  const [[title, link], setTitleLink] = useState([
-    downloadMetadata["ios"].title,
-    downloadMetadata["ios"].url,
-  ]);
+export function DownloadLinkButtonMobileNav() {
+  const i18n = useI18N();
+  const downloadMetadata = getDownloadMetadata(i18n);
+  const [title, setTitle] = useState(downloadMetadata["ios"].title);
 
   useEffect(() => {
     if (detectPlatform(navigator.userAgent) === "android") {
-      setTitleLink([
-        downloadMetadata["android"].title,
-        downloadMetadata["android"].url,
-      ]);
+      setTitle(downloadMetadata["android"].title);
     }
-  }, []);
+  }, [downloadMetadata]);
 
-  return [title, link];
+  return (
+    <Link
+      href={"/download"}
+      target="_blank"
+      className="flex items-center justify-center space-x-4 rounded-lg py-4 px-9 bg-primary text-white font-bold md:text-lg tracking-snug"
+    >
+      <div>{title}</div>
+    </Link>
+  );
 }

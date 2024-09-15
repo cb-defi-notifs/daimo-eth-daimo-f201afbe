@@ -3,35 +3,20 @@ pragma solidity ^0.8.13;
 
 import "forge-std/Test.sol";
 import "forge-std/console2.sol";
-import "../src/DaimoAccountFactory.sol";
-import "../src/DaimoAccount.sol";
-
 import "account-abstraction/core/EntryPoint.sol";
 
-contract AccountSigningKeysTest is Test {
-    using UserOperationLib for UserOperation;
+import "../src/DaimoAccountFactoryV2.sol";
+import "../src/DaimoAccountV2.sol";
+import "./dummy/DaimoDummyUSDC.sol";
 
+contract AccountSigningKeysTest is Test {
     EntryPoint public entryPoint;
-    DaimoVerifier public verifier;
-    DaimoAccountFactory public factory;
+    DaimoAccountFactoryV2 public factory;
 
     function setUp() public {
         entryPoint = new EntryPoint();
-        verifier = new DaimoVerifier();
-        factory = new DaimoAccountFactory(entryPoint, verifier);
+        factory = new DaimoAccountFactoryV2(entryPoint);
     }
-
-    event SigningKeyAdded(
-        IAccount indexed account,
-        uint8 keySlot,
-        bytes32[2] key
-    );
-
-    event SigningKeyRemoved(
-        IAccount indexed account,
-        uint8 keySlot,
-        bytes32[2] key
-    );
 
     function testAddingAndRemovingKeys() public {
         // hardcoded from swift playground
@@ -46,12 +31,21 @@ contract AccountSigningKeysTest is Test {
         bytes32[2] memory key1 = [bytes32(key1u[0]), bytes32(key1u[1])];
         bytes32[2] memory key2 = [bytes32(key2u[0]), bytes32(key2u[1])];
 
-        DaimoAccount.Call[] memory calls = new DaimoAccount.Call[](0);
-        DaimoAccount acc = factory.createAccount(0, key1, calls, 42);
+        // Create a new Daimo account
+        TestUSDC usdc = new TestUSDC();
+        DaimoAccountV2 acc = factory.createAccount(
+            8453, // home chain = Base Mainnet
+            usdc,
+            IDaimoSwapper(address(0)), // inbound swap+bridge unsupported
+            IDaimoBridger(address(0)),
+            0,
+            key1,
+            42 // salt
+        );
         console.log("new account address:", address(acc));
         assertTrue(acc.numActiveKeys() == uint8(1));
 
-        vm.expectRevert("only self");
+        vm.expectRevert("DAv2: only self");
         acc.addSigningKey(1, key2);
 
         vm.startPrank(address(acc));
@@ -59,27 +53,27 @@ contract AccountSigningKeysTest is Test {
         // add key2
         // use a high slot, higher than maxKeys, to ensure that works
         vm.expectEmit(true, true, true, false);
-        emit SigningKeyAdded(acc, 200, key2);
+        emit DaimoAccountV2.SigningKeyAdded(200, key2);
         acc.addSigningKey(200, key2);
         assertTrue(acc.numActiveKeys() == uint8(2));
 
         // add zero key
         bytes32[2] memory keyZero = [bytes32(0), bytes32(0)];
-        vm.expectRevert("new key cannot be 0");
+        vm.expectRevert("DAv2: new key cannot be 0");
         acc.addSigningKey(1, keyZero);
 
         // remove key1
         vm.expectEmit(true, true, true, false);
-        emit SigningKeyRemoved(acc, 0, key1);
+        emit DaimoAccountV2.SigningKeyRemoved(0, key1);
         acc.removeSigningKey(0);
         assertTrue(acc.numActiveKeys() == uint8(1));
 
         // remove nonexistent key
-        vm.expectRevert("key does not exist");
+        vm.expectRevert("DAv2: key does not exist");
         acc.removeSigningKey(199);
 
         // remove key2
-        vm.expectRevert("cannot remove only signing key");
+        vm.expectRevert("DAv2: cannot remove only signing key");
         acc.removeSigningKey(200);
 
         vm.stopPrank();
@@ -97,8 +91,18 @@ contract AccountSigningKeysTest is Test {
         bytes32[2] memory key1 = [bytes32(key1u[0]), bytes32(key1u[1])];
         bytes32[2] memory key2 = [bytes32(key2u[0]), bytes32(key2u[1])];
 
-        DaimoAccount.Call[] memory calls = new DaimoAccount.Call[](0);
-        DaimoAccount acc = factory.createAccount(0, key1, calls, 42);
+        // Create a new Daimo account
+        TestUSDC usdc = new TestUSDC();
+        DaimoAccountV2 acc = factory.createAccount(
+            8453, // home chain = Base Mainnet
+            usdc,
+            IDaimoSwapper(address(0)), // inbound swap+bridge unsupported
+            IDaimoBridger(address(0)),
+            0,
+            key1,
+            42 // salt
+        );
+        console.log("new account address:", address(acc));
         assertTrue(acc.numActiveKeys() == uint8(1));
 
         // ensure initial key retrieves correctly
